@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net9.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.5" />
+		<PackageReference Include="Moclawr.Host" Version="1.0.2" />
+		<PackageReference Include="Moclawr.MinimalAPI" Version="1.0.2" />
+		<PackageReference Include="Serilog" Version="4.3.0" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.5">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.5">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\EcomCore.Domain\EcomCore.Domain.csproj" />
+		<ProjectReference Include="..\EcomCore.Application\EcomCore.Application.csproj" />
+		<ProjectReference Include="..\EcomCore.Infrastructure\EcomCore.Infrastructure.csproj" />
+	</ItemGroup>
+
+</Project>
