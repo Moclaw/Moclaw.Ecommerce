@@ -24,8 +24,13 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
             builder
                 .Property(a => a.UpdatedAt)
                 .HasColumnType("timestamp with time zone")
-                .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
-                .IsRequired();
+                .HasConversion(
+                    v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                    v => v.HasValue
+                        ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
+                        : null
+                )
+                .IsRequired(false);
 
             builder
                 .Property(a => a.DeletedAt)
@@ -35,7 +40,7 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                     v =>
                         v.HasValue
                             ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
-                            : (DateTimeOffset?)null
+                            : null
                 );
 
             builder.Property(a => a.IsDeleted).HasDefaultValue(false);

@@ -27,10 +27,15 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                 .IsRequired();
 
             builder
-                .Property(pv => pv.UpdatedAt)
+                .Property(a => a.UpdatedAt)
                 .HasColumnType("timestamp with time zone")
-                .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
-                .IsRequired();
+                .HasConversion(
+                    v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                    v => v.HasValue
+                        ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
+                        : null
+                )
+                .IsRequired(false);
 
             builder
                 .Property(pv => pv.DeletedAt)
@@ -50,6 +55,13 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
             builder.Property(pv => pv.UpdatedBy);
 
             builder.Property(pv => pv.DeletedBy);
+
+            // Indexes
+            builder.HasIndex(pv => pv.ProductId);
+            builder.HasIndex(pv => pv.Sku).IsUnique();
+            builder.HasIndex(pv => pv.IsDeleted);
+            builder.HasIndex(pv => pv.CreatedAt);
+            builder.HasIndex(pv => pv.UpdatedAt);
 
             // Relationships
             builder

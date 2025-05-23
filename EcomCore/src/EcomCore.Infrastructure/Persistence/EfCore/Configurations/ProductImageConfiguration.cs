@@ -25,10 +25,15 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                 .IsRequired();
 
             builder
-                .Property(pi => pi.UpdatedAt)
-                .HasColumnType("timestamp with time zone")
-                .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
-                .IsRequired();
+                 .Property(a => a.UpdatedAt)
+                 .HasColumnType("timestamp with time zone")
+                 .HasConversion(
+                     v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                     v => v.HasValue
+                         ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
+                         : null
+                 )
+                 .IsRequired(false);
 
             builder
                 .Property(pi => pi.DeletedAt)
@@ -54,6 +59,12 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                 .HasOne(pi => pi.Product)
                 .WithMany(p => p.Images)
                 .HasForeignKey(pi => pi.ProductId);
+
+            // Indexes
+            builder.HasIndex(pi => pi.ProductId);
+            builder.HasIndex(pi => pi.IsDeleted);
+            builder.HasIndex(pi => pi.CreatedAt);
+            builder.HasIndex(pi => pi.UpdatedAt);
 
             // Global Query Filter for Soft Delete
             builder.HasQueryFilter(pi => !pi.IsDeleted);

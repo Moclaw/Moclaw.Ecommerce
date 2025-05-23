@@ -11,37 +11,9 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
             // Primary Key
             builder.HasKey(pc => new { pc.ProductId, pc.CategoryId });
 
-            // Properties
-            builder
-                .Property(pc => pc.CreatedAt)
-                .HasColumnType("timestamp with time zone")
-                .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
-                .IsRequired();
-
-            builder
-                .Property(pc => pc.UpdatedAt)
-                .HasColumnType("timestamp with time zone")
-                .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
-                .IsRequired();
-
-            builder
-                .Property(pc => pc.DeletedAt)
-                .HasColumnType("timestamp with time zone")
-                .HasConversion(
-                    v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
-                    v =>
-                        v.HasValue
-                            ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
-                            : (DateTimeOffset?)null
-                );
-
-            builder.Property(pc => pc.IsDeleted).HasDefaultValue(false);
-
-            builder.Property(pc => pc.CreatedBy).IsRequired();
-
-            builder.Property(pc => pc.UpdatedBy);
-
-            builder.Property(pc => pc.DeletedBy);
+            // Indexes
+            builder.HasIndex(pc => pc.ProductId);
+            builder.HasIndex(pc => pc.CategoryId);
 
             // Relationships
             builder
@@ -54,8 +26,6 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                 .WithMany(c => c.ProductCategories)
                 .HasForeignKey(pc => pc.CategoryId);
 
-            // Global Query Filter for Soft Delete
-            builder.HasQueryFilter(pc => !pc.IsDeleted);
         }
     }
 }

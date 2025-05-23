@@ -1,6 +1,6 @@
 namespace EcomCore.Domain.Entities;
 
-public class ProductCategory : BaseEntity, IEntity<int>
+public class ProductCategory : IEntity<int>
 {
     public int Id { get; set; }
     public int ProductId { get; set; }
