@@ -7,9 +7,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Moclawr.MinimalAPI" Version="1.0.2" />
-    <PackageReference Include="Moclawr.Services.Caching" Version="1.0.2" />
-    <PackageReference Include="Moclawr.Shared" Version="1.0.2" />
+    <PackageReference Include="Moclawr.MinimalAPI" Version="2.0.0" />
+    <PackageReference Include="Moclawr.Services.Caching" Version="2.0.0" />
+    <PackageReference Include="Moclawr.Shared" Version="2.0.1" />
   </ItemGroup>
 
   <ItemGroup>

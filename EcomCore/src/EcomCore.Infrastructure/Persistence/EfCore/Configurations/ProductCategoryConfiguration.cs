@@ -26,6 +26,8 @@ namespace EcomCore.Infrastructure.Persistence.EfCore.Configurations
                 .WithMany(c => c.ProductCategories)
                 .HasForeignKey(pc => pc.CategoryId);
 
+            // Global query filter
+            builder.HasQueryFilter(pc => !pc.Category.IsDeleted && !pc.Product.IsDeleted);
         }
     }
 }

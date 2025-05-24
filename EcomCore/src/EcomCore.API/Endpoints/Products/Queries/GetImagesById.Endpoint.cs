@@ -2,11 +2,14 @@ using EcomCore.Application.Features.Products.Queries.GetImagesById;
 
 namespace EcomCore.API.Endpoints.Products.Queries
 {
-    [Route("products")]
-    public class GetImagesByIdEndpoint(IMediator mediator) : EndpointBase<GetImagesByIdRequest, GetImagesByIdResponse>(mediator)
+    public class GetImagesByIdEndpoint(IMediator mediator)
+        : CollectionEndpointBase<GetImagesByIdRequest, GetImagesByIdResponse>(mediator)
     {
-        [HttpGet]
-        public async override Task<Response<GetImagesByIdResponse>> HandleAsync(GetImagesByIdRequest req, CancellationToken ct)
+        [HttpGet("products-images")]
+        public override async Task<ResponseCollection<GetImagesByIdResponse>> HandleAsync(
+            GetImagesByIdRequest req,
+            CancellationToken ct
+        )
         {
             return await _mediator.Send(req, ct);
         }

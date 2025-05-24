@@ -3,7 +3,7 @@ using EcomCore.Infrastructure;
 using Host;
 using Host.Services;
 using MinimalAPI;
-using Serilog;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,9 +30,21 @@ builder
 
 var app = builder.Build();
 
+// Auto-migrate database
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<EcomCore.Infrastructure.Persistence.EfCore.ApplicationDbContext>();
+    db.Database.Migrate();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/openapi/v1.json", "EcomCore API");
+        options.RoutePrefix = "docs";
+    });
 }
 
 app.UseHttpsRedirection();

@@ -2,11 +2,14 @@
 
 namespace EcomCore.API.Endpoints.Products.Queries
 {
-    [Route("products")]
-    public class GetAllEnpoint(IMediator mediator) : EndpointBase<GetAllRequest, GetAllResponse>(mediator)
+    public class GetAllEnpoint(IMediator mediator)
+        : CollectionEndpointBase<GetAllRequest, GetAllResponse>(mediator)
     {
-        [HttpGet]
-        public async override Task<Response<GetAllResponse>> HandleAsync(GetAllRequest req, CancellationToken ct)
+        [HttpGet("products")]
+        public override async Task<ResponseCollection<GetAllResponse>> HandleAsync(
+            GetAllRequest req,
+            CancellationToken ct
+        )
         {
             return await _mediator.Send(req, ct);
         }

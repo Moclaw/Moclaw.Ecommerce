@@ -4,6 +4,7 @@ namespace EcomCore.Application.Features.Attributes.Queries.GetValuesById
 {
     public class GetValuesByIdRequest : IQueryRequest<GetValuesByIdResponse>
     {
-        public int Id { get; set; } 
+        [FromRoute]
+        public int Id { get; set; }
     }
 }
