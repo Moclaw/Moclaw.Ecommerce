@@ -4,6 +4,8 @@ using Host;
 using Host.Services;
 using MinimalAPI;
 using Microsoft.EntityFrameworkCore;
+using MinimalAPI.OpenApi;
+using MinimalAPI.SwaggerUI;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,17 +18,21 @@ builder.AddSerilog(configuration, appName);
 // Register other services
 builder
     .Services.AddCorsServices(configuration)
-    .AddMinimalApi(
-        typeof(Program).Assembly,
-        typeof(EcomCore.Application.Register).Assembly,
-        typeof(EcomCore.Infrastructure.Register).Assembly
+    .AddMinimalApiWithSwaggerUI(
+        title: "EcomCore API",
+        version: "v1",
+        description: "EcomCore API for e-commerce applications",
+        endpointAssemblies: [
+            typeof(Program).Assembly,
+            typeof(EcomCore.Application.Register).Assembly,
+            typeof(EcomCore.Infrastructure.Register).Assembly,
+            ]
     )
     .AddGlobalExceptionHandling(appName)
     .AddHealthCheck(configuration)
     // Register Infrastructure and Application services
     .AddInfrastructureServices(configuration)
-    .AddApplicationServices(configuration)
-    .AddOpenApi();
+    .AddApplicationServices(configuration);
 
 var app = builder.Build();
 
@@ -39,12 +45,9 @@ using (var scope = app.Services.CreateScope())
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
-    app.UseSwaggerUI(options =>
-    {
-        options.SwaggerEndpoint("/openapi/v1.json", "EcomCore API");
-        options.RoutePrefix = "docs";
-    });
+    app.UseMinimalApiSwaggerUI(
+       routePrefix: "api-docs"
+    );
 }
 
 app.UseHttpsRedirection();
