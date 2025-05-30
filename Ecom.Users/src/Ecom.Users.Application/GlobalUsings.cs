@@ -1,0 +1,15 @@
+global using MinimalAPI.Handlers;
+global using Shared.Responses;
+global using Shared.Entities;
+global using Ecom.Users.Domain.Constants;
+global using Ecom.Users.Domain.Entities;
+global using Ecom.Users.Application.DTOs.Auth;
+global using Ecom.Users.Application.DTOs.Users;
+global using Ecom.Users.Application.Interfaces;
+global using Ecom.Users.Application.Interfaces.Repositories;
+global using Ecom.Users.Application.Common.Models;
+global using Ecom.Users.Application.Common.Exceptions;
+global using MediatR;
+global using Microsoft.Extensions.Logging;
+global using System.ComponentModel.DataAnnotations;
+global using FluentValidation;

@@ -1,0 +1,15 @@
+global using MediatR;
+global using MinimalAPI.Attributes;
+global using MinimalAPI.Endpoints;
+global using Shared.Responses;
+global using Ecom.Users.Application;
+global using Ecom.Users.Application.Commands.Auth;
+global using Ecom.Users.Application.Commands.Users;
+global using Ecom.Users.Application.Queries.Users;
+global using Ecom.Users.Application.DTOs.Auth;
+global using Ecom.Users.Application.DTOs.Users;
+global using Ecom.Users.Application.Common.Models;
+global using Ecom.Users.Infrastructure;
+global using Ecom.Users.Domain.Constants;
+global using Microsoft.AspNetCore.Authorization;
+global using System.Security.Claims;

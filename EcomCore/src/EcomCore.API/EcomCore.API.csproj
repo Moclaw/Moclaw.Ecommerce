@@ -9,7 +9,7 @@
 	<ItemGroup>
 		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.5" />
 	<PackageReference Include="Moclawr.Host" Version="2.1.0" />
-	<PackageReference Include="Moclawr.MinimalAPI" Version="2.1.0" />
+	<PackageReference Include="Moclawr.MinimalAPI" Version="2.1.4" />
 		<PackageReference Include="Serilog" Version="4.3.0" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.5">
 			<PrivateAssets>all</PrivateAssets>

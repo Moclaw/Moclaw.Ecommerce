@@ -12,6 +12,14 @@ var builder = WebApplication.CreateBuilder(args);
 var appName = builder.Environment.ApplicationName;
 var configuration = builder.Configuration;
 
+var versioningOptions = new DefaultVersioningOptions
+{
+    BaseRouteTemplate = "api",
+    DefaultVersion = 1,
+    AssumeDefaultVersionWhenUnspecified = true,
+    GenerateSwaggerDocs = true,
+};
+
 // Configure Serilog
 builder.AddSerilog(configuration, appName);
 
@@ -22,7 +30,7 @@ builder
         title: "EcomCore API",
         version: "v1",
         description: "EcomCore API for e-commerce applications",
-        endpointAssemblies: [
+        assemblies: [
             typeof(Program).Assembly,
             typeof(EcomCore.Application.Register).Assembly,
             typeof(EcomCore.Infrastructure.Register).Assembly,
@@ -67,6 +75,6 @@ app.UseRouting();
 //app.UseHealthChecks(configuration);
 
 // Map all endpoints from the assembly
-app.MapMinimalEndpoints(typeof(Program).Assembly);
+app.MapMinimalEndpoints(versioningOptions ,typeof(Program).Assembly);
 
 await app.RunAsync();
