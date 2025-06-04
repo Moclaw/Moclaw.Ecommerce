@@ -1,7 +1,11 @@
+using Microsoft.AspNetCore.Mvc;
+
 namespace EcomCore.Application.Features.Products.Queries.GetProductById
 {
     public class GetProductByIdRequest : IQueryRequest<GetProductByIdResponse>
     {
+        [FromRoute]
+        public int Id { get; set; }
         public string? Search { get; set; }
         public int PageIndex { get; set; }
         public int PageSize { get; set; }

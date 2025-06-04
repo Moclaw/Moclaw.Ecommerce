@@ -1,3 +1,4 @@
+using Ecom.Users.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -7,86 +8,65 @@ public class RolePermissionConfiguration : IEntityTypeConfiguration<RolePermissi
 {
     public void Configure(EntityTypeBuilder<RolePermission> builder)
     {
-        builder.ToTable("RolePermissions", "users");
-        
-        builder.HasKey(rp => new { rp.RoleId, rp.PermissionId });
-        
-        builder.Property(rp => rp.GrantedAt)
+        // Primary Key
+        builder.HasKey(rp => rp.Id);
+
+        // Properties
+        builder.Property(rp => rp.RoleId).IsRequired();
+        builder.Property(rp => rp.PermissionId).IsRequired();
+
+        // Composite unique index to prevent duplicate role-permission assignments
+        builder.HasIndex(rp => new { rp.RoleId, rp.PermissionId }).IsUnique();
+
+        // Audit fields from BaseEntity
+        builder
+            .Property(rp => rp.CreatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
             .IsRequired();
-            
-        builder.Property(rp => rp.GrantedBy)
-            .IsRequired();
-            
-        builder.Property(rp => rp.IsActive)
-            .IsRequired()
-            .HasDefaultValue(true);
-        
+
+        builder
+            .Property(rp => rp.UpdatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder
+            .Property(rp => rp.DeletedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder.Property(rp => rp.IsDeleted).HasDefaultValue(false);
+        builder.Property(rp => rp.CreatedBy).IsRequired();
+        builder.Property(rp => rp.UpdatedBy);
+        builder.Property(rp => rp.DeletedBy);
+
+        // Indexes
+        builder.HasIndex(rp => rp.IsDeleted);
+        builder.HasIndex(rp => rp.CreatedAt);
+        builder.HasIndex(rp => rp.UpdatedAt);
+        builder.HasIndex(rp => rp.RoleId);
+        builder.HasIndex(rp => rp.PermissionId);
+
         // Relationships
-        builder.HasOne(rp => rp.Role)
+        builder
+            .HasOne(rp => rp.Role)
             .WithMany(r => r.RolePermissions)
             .HasForeignKey(rp => rp.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
-            
-        builder.HasOne(rp => rp.Permission)
+
+        builder
+            .HasOne(rp => rp.Permission)
             .WithMany(p => p.RolePermissions)
             .HasForeignKey(rp => rp.PermissionId)
             .OnDelete(DeleteBehavior.Cascade);
-        
-        // Indexes
-        builder.HasIndex(rp => rp.GrantedAt);
-        builder.HasIndex(rp => rp.IsActive);
-        
-        // Seed data
-        builder.HasData(SeedRolePermissions());
-    }
-    
-    private static RolePermission[] SeedRolePermissions()
-    {
-        var rolePermissions = new List<RolePermission>();
-        var grantedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        const int grantedBy = 1; // Admin user
-        
-        // Admin Role - Gets all permissions (1-18)
-        for (int permissionId = 1; permissionId <= 18; permissionId++)
-        {
-            rolePermissions.Add(new RolePermission
-            {
-                RoleId = 1, // Admin role
-                PermissionId = permissionId,
-                GrantedAt = grantedAt,
-                GrantedBy = grantedBy,
-                IsActive = true
-            });
-        }
-        
-        // Employee Role - Gets user management and view permissions
-        var employeePermissions = new[] { 1, 5, 6, 7, 8, 13, 17, 18 }; // View users, profile management, view roles/permissions, auth
-        foreach (var permissionId in employeePermissions)
-        {
-            rolePermissions.Add(new RolePermission
-            {
-                RoleId = 2, // Employee role
-                PermissionId = permissionId,
-                GrantedAt = grantedAt,
-                GrantedBy = grantedBy,
-                IsActive = true
-            });
-        }
-        
-        // User Role - Gets basic profile and auth permissions
-        var userPermissions = new[] { 5, 6, 7, 17, 18, 19, 20 }; // Profile management and auth
-        foreach (var permissionId in userPermissions)
-        {
-            rolePermissions.Add(new RolePermission
-            {
-                RoleId = 3, // User role
-                PermissionId = permissionId,
-                GrantedAt = grantedAt,
-                GrantedBy = grantedBy,
-                IsActive = true
-            });
-        }
-        
-        return rolePermissions.ToArray();
+
+        // Global Query Filter for Soft Delete
+        builder.HasQueryFilter(rp => !rp.IsDeleted);
     }
 }

@@ -10,11 +10,36 @@ namespace EcomCore.Application.Features.Attributes.Queries.GetValuesById
         )
         : IQueryHandler<GetValuesByIdRequest, GetValuesByIdResponse>
     {
-        public async Task<Response<GetValuesByIdResponse>> Handle(GetValuesByIdRequest request, CancellationToken cancellationToken)
+        public async Task<Response<GetValuesByIdResponse>> Handle(
+            GetValuesByIdRequest request, 
+            CancellationToken cancellationToken
+        )
         {
-            // Implementation goes here
+            var attribute = await repository.GetByIdAsync(request.Id, cancellationToken: cancellationToken);
             
-            return new Response<GetValuesByIdResponse>(IsSuccess: true, 200, "", Data: new GetValuesByIdResponse());
+            if (attribute == null)
+            {
+                return new Response<GetValuesByIdResponse>(
+                    IsSuccess: false, 
+                    404, 
+                    "Attribute not found", 
+                    Data: null
+                );
+            }
+
+            var response = new GetValuesByIdResponse
+            {
+                Id = attribute.Id,
+                AttributeName = attribute.Name,
+                // Map other properties as needed
+            };
+            
+            return new Response<GetValuesByIdResponse>(
+                IsSuccess: true, 
+                200, 
+                "Attribute values retrieved successfully", 
+                Data: response
+            );
         }
     }
 }

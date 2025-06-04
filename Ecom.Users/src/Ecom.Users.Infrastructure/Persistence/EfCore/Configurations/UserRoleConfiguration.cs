@@ -1,3 +1,4 @@
+using Ecom.Users.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -7,74 +8,65 @@ public class UserRoleConfiguration : IEntityTypeConfiguration<UserRole>
 {
     public void Configure(EntityTypeBuilder<UserRole> builder)
     {
-        builder.ToTable("UserRoles", "users");
-        
-        builder.HasKey(ur => new { ur.UserId, ur.RoleId });
-        
-        builder.Property(ur => ur.AssignedAt)
+        // Primary Key
+        builder.HasKey(ur => ur.Id);
+
+        // Properties
+        builder.Property(ur => ur.UserId).IsRequired();
+        builder.Property(ur => ur.RoleId).IsRequired();
+
+        // Composite unique index to prevent duplicate user-role assignments
+        builder.HasIndex(ur => new { ur.UserId, ur.RoleId }).IsUnique();
+
+        // Audit fields from BaseEntity
+        builder
+            .Property(ur => ur.CreatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
             .IsRequired();
-            
-        builder.Property(ur => ur.AssignedBy)
-            .IsRequired();
-            
-        builder.Property(ur => ur.IsActive)
-            .IsRequired()
-            .HasDefaultValue(true);
-            
-        builder.Property(ur => ur.ExpiresAt)
-            .IsRequired(false);
-        
+
+        builder
+            .Property(ur => ur.UpdatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder
+            .Property(ur => ur.DeletedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder.Property(ur => ur.IsDeleted).HasDefaultValue(false);
+        builder.Property(ur => ur.CreatedBy).IsRequired();
+        builder.Property(ur => ur.UpdatedBy);
+        builder.Property(ur => ur.DeletedBy);
+
+        // Indexes
+        builder.HasIndex(ur => ur.IsDeleted);
+        builder.HasIndex(ur => ur.CreatedAt);
+        builder.HasIndex(ur => ur.UpdatedAt);
+        builder.HasIndex(ur => ur.UserId);
+        builder.HasIndex(ur => ur.RoleId);
+
         // Relationships
-        builder.HasOne(ur => ur.User)
+        builder
+            .HasOne(ur => ur.User)
             .WithMany(u => u.UserRoles)
             .HasForeignKey(ur => ur.UserId)
             .OnDelete(DeleteBehavior.Cascade);
-            
-        builder.HasOne(ur => ur.Role)
+
+        builder
+            .HasOne(ur => ur.Role)
             .WithMany(r => r.UserRoles)
             .HasForeignKey(ur => ur.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
-        
-        // Indexes
-        builder.HasIndex(ur => ur.AssignedAt);
-        builder.HasIndex(ur => ur.IsActive);
-        builder.HasIndex(ur => ur.ExpiresAt);
-        
-        // Seed data - assign default User role to seeded users
-        builder.HasData(SeedUserRoles());
-    }
-    
-    private static UserRole[] SeedUserRoles()
-    {
-        return new[]
-        {
-            // Admin user gets Admin role
-            new UserRole
-            {
-                UserId = 1,
-                RoleId = 1, // Admin role
-                AssignedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                AssignedBy = 1, // Self-assigned
-                IsActive = true
-            },
-            // Employee user gets Employee role
-            new UserRole
-            {
-                UserId = 2,
-                RoleId = 2, // Employee role
-                AssignedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                AssignedBy = 1, // Assigned by admin
-                IsActive = true
-            },
-            // Regular user gets User role
-            new UserRole
-            {
-                UserId = 3,
-                RoleId = 3, // User role
-                AssignedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                AssignedBy = 1, // Assigned by admin
-                IsActive = true
-            }
-        };
+
+        // Global Query Filter for Soft Delete
+        builder.HasQueryFilter(ur => !ur.IsDeleted);
     }
 }

@@ -1,5 +1,6 @@
 using EcomCore.Domain.Entities;
 using Microsoft.Extensions.DependencyInjection;
+using Mapster;
 
 namespace EcomCore.Application.Features.Products.Queries.GetProductById
 {
@@ -12,13 +13,26 @@ namespace EcomCore.Application.Features.Products.Queries.GetProductById
             CancellationToken cancellationToken
         )
         {
-            // Implementation goes here
+            var product = await repository.GetByIdAsync<GetProductByIdResponse>(
+                request.Id, 
+                cancellationToken: cancellationToken
+            );
+
+            if (product == null)
+            {
+                return new Response<GetProductByIdResponse>(
+                    IsSuccess: false,
+                    404,
+                    "Product not found",
+                    Data: null
+                );
+            }
 
             return new Response<GetProductByIdResponse>(
                 IsSuccess: true,
                 200,
-                "",
-                Data: new GetProductByIdResponse()
+                "Product retrieved successfully",
+                Data: product
             );
         }
     }

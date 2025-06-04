@@ -4,28 +4,31 @@ public class RefreshToken : BaseEntity, IEntity<Guid>
 {
     public Guid Id { get; set; }
     
-    public Guid UserId { get; set; }
+    public string Token { get; set; } = null!;
     
-    public string Token { get; set; } = string.Empty;
+    public DateTimeOffset ExpiryDate { get; set; }
     
-    public DateTimeOffset ExpiresAt { get; set; }
+    public bool IsUsed { get; set; } = false;
     
-    public bool IsRevoked { get; set; }
+    public bool IsRevoked { get; set; } = false;
     
     public DateTimeOffset? RevokedAt { get; set; }
     
-    public string? RevokedByIp { get; set; }
-    
     public string? ReplacedByToken { get; set; }
     
-    public string? ReasonRevoked { get; set; }
+    public Guid UserId { get; set; }
     
-    public string CreatedByIp { get; set; } = string.Empty;
+    public string JwtId { get; set; } = null!;
     
-    public bool IsExpired => DateTimeOffset.UtcNow >= ExpiresAt;
+    public string? IpAddress { get; set; }
     
-    public bool IsActive => !IsRevoked && !IsExpired;
+    public string? UserAgent { get; set; }
+
+    // Navigation properties
+    public User User { get; set; } = null!;
     
-    // Navigation Properties
-    public virtual User User { get; set; } = null!;
+    // Helper properties
+    public bool IsExpired => DateTimeOffset.UtcNow >= ExpiryDate;
+    
+    public bool IsActive => !IsRevoked && !IsExpired && !IsUsed;
 }

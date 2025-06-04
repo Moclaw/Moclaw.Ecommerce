@@ -1,3 +1,4 @@
+using Ecom.Users.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -7,64 +8,79 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
 {
     public void Configure(EntityTypeBuilder<RefreshToken> builder)
     {
-        builder.ToTable("RefreshTokens", "users");
-        
+        // Primary Key
         builder.HasKey(rt => rt.Id);
-        
-        builder.Property(rt => rt.Id)
-            .ValueGeneratedOnAdd();
-            
-        builder.Property(rt => rt.Token)
-            .IsRequired()
-            .HasMaxLength(500);
-            
-        builder.Property(rt => rt.JwtId)
-            .IsRequired()
-            .HasMaxLength(36);
-            
-        builder.Property(rt => rt.CreatedAt)
+
+        // Properties
+        builder.Property(rt => rt.UserId).IsRequired();
+        builder.Property(rt => rt.Token).IsRequired().HasMaxLength(512);
+        builder.HasIndex(rt => rt.Token).IsUnique();
+
+        builder.Property(rt => rt.JwtId).HasMaxLength(256);
+        builder.HasIndex(rt => rt.JwtId);
+
+        builder
+            .Property(rt => rt.ExpiryDate)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
             .IsRequired();
-            
-        builder.Property(rt => rt.ExpiresAt)
+
+        builder
+            .Property(rt => rt.RevokedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder.Property(rt => rt.IsUsed).HasDefaultValue(false);
+        builder.Property(rt => rt.IsRevoked).HasDefaultValue(false);
+
+        // Audit fields from BaseEntity
+        builder
+            .Property(rt => rt.CreatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(v => v.UtcDateTime, v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
             .IsRequired();
-            
-        builder.Property(rt => rt.Used)
-            .IsRequired()
-            .HasDefaultValue(false);
-            
-        builder.Property(rt => rt.Invalidated)
-            .IsRequired()
-            .HasDefaultValue(false);
-            
-        builder.Property(rt => rt.UsedAt)
-            .IsRequired(false);
-            
-        builder.Property(rt => rt.InvalidatedAt)
-            .IsRequired(false);
-            
-        builder.Property(rt => rt.DeviceInfo)
-            .HasMaxLength(255);
-            
-        builder.Property(rt => rt.IpAddress)
-            .HasMaxLength(45); // IPv6 max length
-        
+
+        builder
+            .Property(rt => rt.UpdatedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder
+            .Property(rt => rt.DeletedAt)
+            .HasColumnType("timestamp with time zone")
+            .HasConversion(
+                v => v.HasValue ? v.Value.UtcDateTime : (DateTime?)null,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : (DateTimeOffset?)null
+            );
+
+        builder.Property(rt => rt.IsDeleted).HasDefaultValue(false);
+        builder.Property(rt => rt.CreatedBy).IsRequired();
+        builder.Property(rt => rt.UpdatedBy);
+        builder.Property(rt => rt.DeletedBy);
+
+        // Indexes
+        builder.HasIndex(rt => rt.IsDeleted);
+        builder.HasIndex(rt => rt.CreatedAt);
+        builder.HasIndex(rt => rt.UpdatedAt);
+        builder.HasIndex(rt => rt.UserId);
+        builder.HasIndex(rt => rt.ExpiryDate);
+        builder.HasIndex(rt => rt.IsUsed);
+        builder.HasIndex(rt => rt.IsRevoked);
+
         // Relationships
-        builder.HasOne(rt => rt.User)
+        builder
+            .HasOne(rt => rt.User)
             .WithMany(u => u.RefreshTokens)
             .HasForeignKey(rt => rt.UserId)
             .OnDelete(DeleteBehavior.Cascade);
-        
-        // Indexes
-        builder.HasIndex(rt => rt.Token)
-            .IsUnique();
-            
-        builder.HasIndex(rt => rt.JwtId)
-            .IsUnique();
-            
-        builder.HasIndex(rt => rt.UserId);
-        builder.HasIndex(rt => rt.ExpiresAt);
-        builder.HasIndex(rt => rt.Used);
-        builder.HasIndex(rt => rt.Invalidated);
-        builder.HasIndex(rt => new { rt.UserId, rt.Used, rt.Invalidated });
+
+        // Global Query Filter for Soft Delete
+        builder.HasQueryFilter(rt => !rt.IsDeleted);
     }
 }

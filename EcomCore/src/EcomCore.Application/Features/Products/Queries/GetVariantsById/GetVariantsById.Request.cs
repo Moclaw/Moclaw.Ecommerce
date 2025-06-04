@@ -1,7 +1,11 @@
+using MinimalAPI.Attributes;
+
 namespace EcomCore.Application.Features.Products.Queries.GetVariantsById
 {
     public class GetVariantsByIdRequest : IQueryCollectionRequest<GetVariantsByIdResponse>
     {
+        [FromRoute]
+        public int Id { get; set; }
         public string? Search { get; set; }
         public int PageIndex { get; set; }
         public int PageSize { get; set; }

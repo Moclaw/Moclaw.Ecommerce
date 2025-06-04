@@ -1,5 +1,6 @@
 using EcomCore.Domain.Entities;
 using Microsoft.Extensions.DependencyInjection;
+using Mapster;
 
 namespace EcomCore.Application.Features.Products.Queries.GetVariantsById
 {
@@ -12,13 +13,25 @@ namespace EcomCore.Application.Features.Products.Queries.GetVariantsById
             CancellationToken cancellationToken
         )
         {
-            // Implementation goes here
+            var product = await repository.GetByIdAsync(request.Id, cancellationToken: cancellationToken);
+            
+            if (product == null)
+            {
+                return new ResponseCollection<GetVariantsByIdResponse>(
+                    IsSuccess: false,
+                    404,
+                    "Product not found",
+                    Data: []
+                );
+            }
+
+            var variants = product.Variants?.Adapt<List<GetVariantsByIdResponse>>() ?? [];
 
             return new ResponseCollection<GetVariantsByIdResponse>(
                 IsSuccess: true,
                 200,
-                "",
-                Data: []
+                "Product variants retrieved successfully",
+                Data: variants
             );
         }
     }

@@ -5,10 +5,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
   <ItemGroup>
+    <PackageReference Include="Moclawr.Core" Version="2.1.0" />
     <PackageReference Include="Moclawr.Domain" Version="2.1.0" />
-  </ItemGroup>  <ItemGroup>
-    <ProjectReference Include="..\..\..\EcomCore\src\EcomCore.Domain\EcomCore.Domain.csproj" />
+    <PackageReference Include="Moclawr.Shared" Version="2.0.1" />
+    <PackageReference Include="Refit" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Repositories\" />
+    <Folder Include="Specifications\" />
   </ItemGroup>
 
 </Project>

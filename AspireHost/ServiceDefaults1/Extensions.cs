@@ -116,5 +116,12 @@ namespace Microsoft.Extensions.Hosting
 
             return app;
         }
+
+
+        //add postgresql health check
+        public static IHealthChecksBuilder AddPostgresHealthCheck(this IHealthChecksBuilder builder, string connectionString, string? name = null, HealthStatus? failureStatus = null, IEnumerable<string>? tags = null)
+        {
+            return builder.AddNpgSql(connectionString, name, failureStatus, tags);
+        }
+        }
     }
-}

@@ -1,13 +1,13 @@
-using DotnetCap;
+using Autofac;
+using Ecom.Users.Domain.Constants;
+using Ecom.Users.Infrastructure.Persistence.EfCore;
+using Ecom.Users.Infrastructure.Repositories;
 using EfCore.IRepositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
-using Ecom.Users.Domain.Constants;
-using Ecom.Users.Infrastructure.Persistence.EfCore;
-using Ecom.Users.Infrastructure.Repositories;
+using Services.Autofac.Extensions;
 
 namespace Ecom.Users.Infrastructure
 {
@@ -19,14 +19,10 @@ namespace Ecom.Users.Infrastructure
         )
         {
             ArgumentNullException.ThrowIfNull(configuration);
-            
+
             // Register DbContext
             services.AddDbContext<ApplicationDbContext>(options =>
-            {
-                options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"))
-                    .EnableSensitiveDataLogging()
-                    .LogTo(Console.WriteLine, LogLevel.Information);
-            });
+                options.UseSqlite(configuration.GetConnectionString("DefaultConnection") ?? "Data Source=ecom_users.db"));
 
             services.AddScoped<ApplicationDbContext>();
 
@@ -41,6 +37,14 @@ namespace Ecom.Users.Infrastructure
             );
 
             return services;
+        }
+
+        public static ContainerBuilder AddInfrastructureServices(this ContainerBuilder builder)
+        {
+            // Register services from this assembly using attribute-based registration
+            builder.RegisterServiceAssemblies(true, false, typeof(Register).Assembly);
+
+            return builder;
         }
     }
 }

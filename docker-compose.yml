@@ -1,0 +1,13 @@
+services:
+  ecom.users.api:
+    image: ${DOCKER_REGISTRY-}ecomusersapi
+    build:
+      context: .
+      dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
+
+  ecomcore.api:
+    image: ${DOCKER_REGISTRY-}ecomcoreapi
+    build:
+      context: .
+      dockerfile: EcomCore/src/EcomCore.API/Dockerfile
+

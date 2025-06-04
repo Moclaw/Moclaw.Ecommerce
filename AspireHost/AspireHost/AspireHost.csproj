@@ -12,7 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.1.0" />
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.3.0" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="9.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Ecom.Users\src\Ecom.Users.API\Ecom.Users.API.csproj" />
+    <ProjectReference Include="..\..\EcomCore\src\EcomCore.API\EcomCore.API.csproj" />
   </ItemGroup>
 
 </Project>

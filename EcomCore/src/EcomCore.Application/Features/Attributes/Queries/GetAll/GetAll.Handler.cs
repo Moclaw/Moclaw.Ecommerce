@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Shared.Utils;
 
 namespace EcomCore.Application.Features.Attributes.Queries.GetAll
 {
@@ -12,9 +13,17 @@ namespace EcomCore.Application.Features.Attributes.Queries.GetAll
             CancellationToken cancellationToken
         )
         {
-            // Implementation goes here
+            var attributes = await repository.GetAllAsync<GetAllResponse>(
+                paging: new Pagination(default, request.PageIndex, request.PageSize),
+                cancellationToken: cancellationToken
+            );
 
-            return new ResponseCollection<GetAllResponse>(IsSuccess: true, 200, "", Data: []);
+            return new ResponseCollection<GetAllResponse>(
+                IsSuccess: true, 
+                200, 
+                "Attributes retrieved successfully.",
+                Data: [.. attributes.Entities]
+            );
         }
     }
 }
