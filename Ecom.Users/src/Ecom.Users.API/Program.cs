@@ -1,3 +1,5 @@
+using System.Text;
+using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Ecom.Users.API.Middleware;
 using Ecom.Users.Application;
@@ -12,49 +14,45 @@ using MinimalAPI.OpenApi;
 using MinimalAPI.SwaggerUI;
 using Serilog;
 using Services.Autofac.Extensions;
-using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var appName = builder.Environment.ApplicationName;
 var configuration = builder.Configuration;
 
-builder.UseAutofacServiceProvider(containerBuilder =>
-{
-    // Register application and infrastructure services with Autofac
-    containerBuilder
-        .AddApplicationServices()
-        .AddInfrastructureServices();
-});
-
-
 // Configure Serilog
 builder.AddSerilog(configuration, appName);
 
 // Configure JWT Authentication
 var jwtOptions = configuration.GetSection("JwtOptions").Get<JwtOptions>();
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
+builder
+    .Services.AddAuthentication(options =>
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtOptions?.Issuer,
-        ValidAudience = jwtOptions?.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions?.Secret ?? "default_key_for_development_only")),
-        ClockSkew = TimeSpan.Zero
-    };
-});
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtOptions?.Issuer,
+            ValidAudience = jwtOptions?.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtOptions?.Secret ?? "default_key_for_development_only")
+            ),
+            ClockSkew = TimeSpan.Zero,
+        };
+    });
 
 // Register authorization
 builder.Services.AddAuthorization();
+
+// Add API Explorer services for Swagger
+builder.Services.AddEndpointsApiExplorer();
 
 var versioningOptions = new DefaultVersioningOptions
 {
@@ -72,10 +70,11 @@ builder
         version: "v1",
         description: "User management and authentication API",
         versioningOptions: versioningOptions,
-        assemblies: [
+        assemblies:
+        [
             typeof(Program).Assembly,
             typeof(Ecom.Users.Application.Register).Assembly,
-            typeof(Ecom.Users.Infrastructure.Register).Assembly
+            typeof(Ecom.Users.Infrastructure.Register).Assembly,
         ]
     )
     .AddAutofac()
@@ -85,15 +84,28 @@ builder
     .AddInfrastructureServices(configuration)
     .AddApplicationServices(configuration);
 
+// Configure Autofac after all service registrations
+builder.Host.UseServiceProviderFactory(new AutofacServiceProviderFactory());
+builder.Host.ConfigureContainer<ContainerBuilder>(containerBuilder =>
+{
+    // Register application and infrastructure services with Autofac
+    containerBuilder.AddApplicationServices().AddInfrastructureServices();
+});
+
 var app = builder.Build();
 
 app.MapMinimalEndpoints(versioningOptions, typeof(Program).Assembly);
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseMinimalApiSwaggerUI(
-     routePrefix: "api-docs"
-  );
+    app.UseMinimalApiOpenApi();
+
+    app.UseMinimalApiDocs(
+        swaggerRoutePrefix: "docs",
+        enableTryItOut: true,
+        enableDeepLinking: true,
+        enableFilter: true
+    );
 }
 
 app.UseHttpsRedirection();

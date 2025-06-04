@@ -1,24 +1,24 @@
 using Microsoft.Extensions.DependencyInjection;
 using Shared.Utils;
 
-namespace EcomCore.Application.Features.Attributes.Queries.GetAll
+namespace EcomCore.Application.Features.Attributes.Queries.GetAllAttributes
 {
-    public class GetAllHandler(
+    public class GetAllAttributesHandler(
         [FromKeyedServices(ServiceKeys.QueryRepository)]
             IQueryRepository<Domain.Entities.Attribute, int> repository
-    ) : IQueryCollectionHandler<GetAllRequest, GetAllResponse>
+    ) : IQueryCollectionHandler<GetAllAttributesRequest, GetAllAttributesResponse>
     {
-        public async Task<ResponseCollection<GetAllResponse>> Handle(
-            GetAllRequest request,
+        public async Task<ResponseCollection<GetAllAttributesResponse>> Handle(
+            GetAllAttributesRequest request,
             CancellationToken cancellationToken
         )
         {
-            var attributes = await repository.GetAllAsync<GetAllResponse>(
+            var attributes = await repository.GetAllAsync<GetAllAttributesResponse>(
                 paging: new Pagination(default, request.PageIndex, request.PageSize),
                 cancellationToken: cancellationToken
             );
 
-            return new ResponseCollection<GetAllResponse>(
+            return new ResponseCollection<GetAllAttributesResponse>(
                 IsSuccess: true, 
                 200, 
                 "Attributes retrieved successfully.",

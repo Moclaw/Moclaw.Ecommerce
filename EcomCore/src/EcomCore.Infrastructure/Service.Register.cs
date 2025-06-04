@@ -1,3 +1,4 @@
+using Autofac;
 using EcomCore.Domain.Constants;
 using EcomCore.Infrastructure.Persistence.EfCore;
 using EcomCore.Infrastructure.Repositories;
@@ -7,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Services.Autofac.Extensions;
 
 namespace EcomCore.Infrastructure
 {
@@ -27,7 +29,7 @@ namespace EcomCore.Infrastructure
             });
 
             services.AddScoped<ApplicationDbContext>();
-            
+
             //services.AddDotnetCap(configuration).AddRabbitMq(configuration);
 
             services.AddKeyedScoped<ICommandRepository, CommandDefaultRepository>(ServiceKeys.CommandRepository);
@@ -38,7 +40,16 @@ namespace EcomCore.Infrastructure
                 typeof(QueryDefaultRepository<,>)
             );
 
+            // Add infrastructure services here
             return services;
+        }
+
+        public static ContainerBuilder AddInfrastructureServices(this ContainerBuilder builder)
+        {
+            // Register services from this assembly using attribute-based registration
+            builder.RegisterServiceAssemblies(true, false, typeof(Register).Assembly);
+
+            return builder;
         }
     }
 }

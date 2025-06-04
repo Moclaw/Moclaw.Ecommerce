@@ -7,7 +7,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Moclawr.MinimalAPI" Version="2.1.6" />
+    <PackageReference Include="Moclawr.MinimalAPI" Version="2.1.9" />
+    <PackageReference Include="Moclawr.Services.Autofac" Version="2.1.1" />
     <PackageReference Include="Moclawr.Services.AWS.S3" Version="2.0.0" />
     <PackageReference Include="Moclawr.Services.Caching" Version="2.1.0" />
     <PackageReference Include="Moclawr.Shared" Version="2.0.1" />

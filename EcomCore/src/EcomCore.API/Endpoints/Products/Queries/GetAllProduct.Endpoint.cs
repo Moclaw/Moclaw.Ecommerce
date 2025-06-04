@@ -1,11 +1,11 @@
-using EcomCore.Application.Features.Attributes.Queries.GetAll;
+﻿using EcomCore.Application.Features.Products.Queries.GetAll;
 
-namespace EcomCore.API.Endpoints.Attributes.Queries
+namespace EcomCore.API.Endpoints.Products.Queries
 {
-    public class GetAllEndpoint(IMediator mediator)
+    public class GetAllProductEnpoint(IMediator mediator)
         : CollectionEndpointBase<GetAllRequest, GetAllResponse>(mediator)
     {
-        [HttpGet("attributes")]
+        [HttpGet("products")]
         public override async Task<ResponseCollection<GetAllResponse>> HandleAsync(
             GetAllRequest req,
             CancellationToken ct

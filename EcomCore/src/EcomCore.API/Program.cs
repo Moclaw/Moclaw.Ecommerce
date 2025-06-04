@@ -1,16 +1,26 @@
+using Autofac;
+using Autofac.Extensions.DependencyInjection;
 using EcomCore.Application;
 using EcomCore.Infrastructure;
 using Host;
 using Host.Services;
-using MinimalAPI;
 using Microsoft.EntityFrameworkCore;
+using MinimalAPI;
 using MinimalAPI.OpenApi;
 using MinimalAPI.SwaggerUI;
+using Services.Autofac.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var appName = builder.Environment.ApplicationName;
 var configuration = builder.Configuration;
+
+builder.Host.UseServiceProviderFactory(new AutofacServiceProviderFactory());
+builder.Host.ConfigureContainer<ContainerBuilder>(containerBuilder =>
+{
+    // Register application and infrastructure services with Autofac
+    containerBuilder.AddApplicationServices().AddInfrastructureServices();
+});
 
 var versioningOptions = new DefaultVersioningOptions
 {
@@ -23,6 +33,9 @@ var versioningOptions = new DefaultVersioningOptions
 // Configure Serilog
 builder.AddSerilog(configuration, appName);
 
+// Add API Explorer services (required for Swagger with minimal APIs)
+builder.Services.AddEndpointsApiExplorer();
+
 // Register other services
 builder
     .Services.AddCorsServices(configuration)
@@ -30,12 +43,14 @@ builder
         title: "EcomCore API",
         version: "v1",
         description: "EcomCore API for e-commerce applications",
-        assemblies: [
+        assemblies:
+        [
             typeof(Program).Assembly,
             typeof(EcomCore.Application.Register).Assembly,
             typeof(EcomCore.Infrastructure.Register).Assembly,
-            ]
+        ]
     )
+    .AddAutofac()
     .AddGlobalExceptionHandling(appName)
     .AddHealthCheck(configuration)
     // Register Infrastructure and Application services
@@ -45,17 +60,22 @@ builder
 var app = builder.Build();
 
 // Auto-migrate database
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<EcomCore.Infrastructure.Persistence.EfCore.ApplicationDbContext>();
-    db.Database.Migrate();
-}
+// using (var scope = app.Services.CreateScope())
+// {
+//     var db = scope.ServiceProvider.GetRequiredService<EcomCore.Infrastructure.Persistence.EfCore.ApplicationDbContext>();
+//     db.Database.Migrate();
+// }
 app.MapMinimalEndpoints(versioningOptions, typeof(Program).Assembly);
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseMinimalApiSwaggerUI(
-       routePrefix: "api-docs"
+    app.UseMinimalApiOpenApi();
+
+    app.UseMinimalApiDocs(
+        swaggerRoutePrefix: "docs",
+        enableTryItOut: true,
+        enableDeepLinking: true,
+        enableFilter: true
     );
 }
 

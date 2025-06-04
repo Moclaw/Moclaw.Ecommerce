@@ -1,6 +1,6 @@
-namespace EcomCore.Application.Features.Attributes.Queries.GetAll
+namespace EcomCore.Application.Features.Attributes.Queries.GetAllAttributes
 {
-    public class GetAllResponse
+    public class GetAllAttributesResponse
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;

@@ -12,7 +12,7 @@
     <PackageReference Include="Moclawr.Services.Autofac" Version="2.1.1" />
     <PackageReference Include="Moclawr.Services.Caching" Version="2.1.0" />
     <PackageReference Include="Moclawr.Shared" Version="2.0.1" />
-    <PackageReference Include="Moclawr.MinimalAPI" Version="2.1.7" />
+    <PackageReference Include="Moclawr.MinimalAPI" Version="2.1.9" />
   </ItemGroup>
 
   <PropertyGroup>

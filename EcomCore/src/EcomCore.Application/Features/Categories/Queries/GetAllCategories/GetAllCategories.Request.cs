@@ -1,6 +1,6 @@
-namespace EcomCore.Application.Features.Categories.Queries.GetAll
+namespace EcomCore.Application.Features.Categories.Queries.GetAllCategories
 {
-    public class GetAllRequest : IQueryCollectionRequest<GetAllResponse>
+    public class GetAllCategoriesRequest : IQueryCollectionRequest<GetAllCategoriesResponse>
     {
         public string? Search { get; set; }
         public int PageIndex { get; set; }
