@@ -1,3 +1,4 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Interfaces;
 using Shared.Utils;
@@ -12,8 +13,8 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Login
         {
             var loginDto = new LoginDto
             {
-                Email = request.Email,
-                Password = request.Password,
+                Email = request.Email ?? string.Empty,
+                Password = request.Password ?? string.Empty,
                 RememberMe = request.RememberMe
             };
 
@@ -21,12 +22,9 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Login
 
             if (!result.IsSuccess || result.Data == null)
             {
-                return new Response<LoginResponse>(
-                    IsSuccess: false,
-                    400,
-                    result.Message ?? "Login failed",
-                    Data: null
-                );
+                return ResponseUtils.Error<LoginResponse>(
+                    result.StatusCode,
+                    result.Message ?? MessageKeys.InvalidCredentials);
             }
 
             var authResponse = result.Data;
@@ -40,7 +38,7 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Login
                 Roles = [.. authResponse.Roles]
             };
 
-            return ResponseUtils.Success(response, "Login successful");
+            return ResponseUtils.Success(response, MessageKeys.LoginSuccess);
         }
     }
 }

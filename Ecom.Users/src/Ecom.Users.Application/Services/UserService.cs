@@ -29,8 +29,8 @@ public class UserService(
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(204,
-                    "User not found");
+                return ResponseUtils.Error<UserDto>(404,
+                    MessageKeys.UserNotFound);
             }
 
             return ResponseUtils.Success(MapToDto(user));
@@ -39,7 +39,7 @@ public class UserService(
         {
             logger.LogError(ex, "Error getting user by ID {UserId}", userId);
             return ResponseUtils.Error<UserDto>(500,
-                "Error retrieving user");
+                MessageKeys.Error);
         }
     }
 
@@ -52,8 +52,8 @@ public class UserService(
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(204,
-                    $"User with email {email} does not exist");
+                return ResponseUtils.Error<UserDto>(404,
+                    MessageKeys.UserNotFound);
             }
 
             return ResponseUtils.Success(MapToDto(user));
@@ -62,7 +62,7 @@ public class UserService(
         {
             logger.LogError(ex, "Error getting user by email {Email}", email);
             return ResponseUtils.Error<UserDto>(500,
-                "Error retrieving user by email");
+                MessageKeys.Error);
         }
     }
 
@@ -115,9 +115,8 @@ pagination: rs.Pagination);
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(
-                    204, "User not found"
-                   );
+                return ResponseUtils.Error<UserDto>(404, 
+                    MessageKeys.UserNotFound);
             }
 
             // Check if username is already taken (if updating username)
@@ -129,7 +128,7 @@ pagination: rs.Pagination);
                 if (existingUsername != null)
                 {
                     return ResponseUtils.Error<UserDto>(
-                      400, "Username is already taken");
+                      400, MessageKeys.UserNameTaken);
                 }
             }
 
@@ -153,13 +152,13 @@ pagination: rs.Pagination);
             await commandRepository.UpdateAsync(user);
             await commandRepository.SaveChangesAsync(default);
 
-            return ResponseUtils.Success(MapToDto(user));
+            return ResponseUtils.Success(MapToDto(user), MessageKeys.UserUpdatedSuccessfully);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error updating user {UserId}", userId);
             return ResponseUtils.Error<UserDto>(500,
-                "Error updating user");
+                MessageKeys.Error);
         }
     }
 
@@ -173,7 +172,7 @@ pagination: rs.Pagination);
             if (user == null)
             {
                 return ResponseUtils.Error<bool>(
-                   204, "User not found");
+                   204, MessageKeys.UserNotFound);
             }
 
             // Verify current password
@@ -181,7 +180,7 @@ pagination: rs.Pagination);
             {
                 return ResponseUtils.Error<bool>(
                    400,
-                    "Current password is incorrect");
+                    MessageKeys.CurrentPasswordIncorrect);
             }
 
             // Update password
@@ -199,7 +198,7 @@ pagination: rs.Pagination);
         catch (Exception ex)
         {
             logger.LogError(ex, "Error updating password for user {UserId}", userId);
-            return ResponseUtils.Error<bool>(500, "An unexpected error occurred");
+            return ResponseUtils.Error<bool>(500, MessageKeys.InternalServerError);
         }
     }
 

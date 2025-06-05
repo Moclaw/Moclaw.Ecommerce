@@ -1,4 +1,6 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Users.Queries.GetById
 {
@@ -15,12 +17,9 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetById
             
             if (!userResult.IsSuccess || userResult.Data == null)
             {
-                return new Response<GetByIdResponse>(
-                    IsSuccess: false,
+                return ResponseUtils.Error<GetByIdResponse>(
                     404,
-                    "User not found",
-                    Data: null
-                );
+                    MessageKeys.UserNotFound);
             }
 
             var user = userResult.Data;
@@ -39,12 +38,7 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetById
                 Roles = rolesResult.IsSuccess ? rolesResult.Data?.Select(r => r.Name).ToList() ?? [] : []
             };
 
-            return new Response<GetByIdResponse>(
-                IsSuccess: true,
-                200,
-                "User retrieved successfully",
-                Data: response
-            );
+            return ResponseUtils.Success(response, MessageKeys.Success);
         }
     }
 }

@@ -1,5 +1,7 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Auth.Commands.RefreshToken
 {
@@ -17,12 +19,9 @@ namespace Ecom.Users.Application.Features.Auth.Commands.RefreshToken
 
             if (!result.IsSuccess || result.Data == null)
             {
-                return new Response<RefreshTokenResponse>(
-                    IsSuccess: false,
-                    400,
-                    result.Message ?? "Token refresh failed",
-                    Data: null
-                );
+                return ResponseUtils.Error<RefreshTokenResponse>(
+                    result.StatusCode,
+                    result.Message ?? MessageKeys.Error);
             }
 
             var authResponse = result.Data;
@@ -33,12 +32,7 @@ namespace Ecom.Users.Application.Features.Auth.Commands.RefreshToken
                 ExpiresAt = authResponse.ExpiresAt.DateTime, // Explicitly convert DateTimeOffset to DateTime
             };
 
-            return new Response<RefreshTokenResponse>(
-                IsSuccess: true,
-                200,
-                "Token refreshed successfully",
-                Data: response
-            );
+            return ResponseUtils.Success(response, MessageKeys.Success);
         }
     }
 }

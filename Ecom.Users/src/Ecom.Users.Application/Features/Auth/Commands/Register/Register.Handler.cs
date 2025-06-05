@@ -1,5 +1,7 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Auth.Commands.Register
 {
@@ -12,6 +14,17 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Register
             CancellationToken cancellationToken
         )
         {
+            // Validate request
+            if (string.IsNullOrEmpty(request.Email))
+            {
+                return ResponseUtils.Error<RegisterResponse>(400, "Email is required");
+            }
+
+            if (string.IsNullOrEmpty(request.Password))
+            {
+                return ResponseUtils.Error<RegisterResponse>(400, "Password is required");
+            }
+
             var registerDto = new RegisterDto
             {
                 Email = request.Email,
@@ -19,19 +32,17 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Register
                 ConfirmPassword = request.ConfirmPassword,
                 FirstName = request.FirstName ?? "",
                 LastName = request.LastName ?? "",
-                PhoneNumber = request.PhoneNumber
+                PhoneNumber = request.PhoneNumber,
+                UserName = request.UserName ?? ""
             };
 
             var result = await authService.RegisterAsync(registerDto);
             
             if (!result.IsSuccess || result.Data == null)
             {
-                return new Response<RegisterResponse>(
-                    IsSuccess: false,
-                    400,
-                    result.Message ?? "Registration failed",
-                    Data: null
-                );
+                return ResponseUtils.Error<RegisterResponse>(
+                    result.StatusCode,
+                    result.Message ?? MessageKeys.Error);
             }
 
             var authResponse = result.Data;
@@ -45,12 +56,7 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Register
                 Roles = [.. authResponse.Roles]
             };
 
-            return new Response<RegisterResponse>(
-                IsSuccess: true,
-                201,
-                "Registration successful",
-                Data: response
-            );
+            return ResponseUtils.Success(response, MessageKeys.Success);
         }
     }
 }

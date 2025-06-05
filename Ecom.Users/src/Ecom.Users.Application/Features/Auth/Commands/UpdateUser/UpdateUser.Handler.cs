@@ -1,5 +1,7 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Auth.Commands.UpdateUser
 {
@@ -29,18 +31,22 @@ namespace Ecom.Users.Application.Features.Auth.Commands.UpdateUser
                 updateDto, 
                 request.IsAdmin);
 
+            if (!result.IsSuccess)
+            {
+                return ResponseUtils.Error<UpdateUserResponse>(
+                    result.StatusCode,
+                    result.Message ?? MessageKeys.Error);
+            }
+
             var response = new UpdateUserResponse
             {
                 IsSuccess = result.IsSuccess,
                 UserId = request.TargetUserId
             };
 
-            return new Response<UpdateUserResponse>(
-                IsSuccess: result.IsSuccess,
-                result.IsSuccess ? 200 : 400,
-                result.Message ?? (result.IsSuccess ? "User updated successfully" : "User update failed"),
-                Data: response
-            );
+            return ResponseUtils.Success(
+                response, 
+                result.Message ?? MessageKeys.UserUpdatedSuccessfully);
         }
     }
 }

@@ -29,7 +29,7 @@ public class AuthService(
             var existingUser = await userRepository.FirstOrDefaultAsync(u => u.Email == registerDto.Email);
             if (existingUser != null)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "Registration failed");
+                return ResponseUtils.Error<AuthResponseDto>(400, "User with this email already exists");
             }
 
             // Check username availability
@@ -38,7 +38,7 @@ public class AuthService(
                 var existingUsername = await userRepository.FirstOrDefaultAsync(u => u.UserName == registerDto.UserName);
                 if (existingUsername != null)
                 {
-                    return ResponseUtils.Error<AuthResponseDto>(400, "Registration failed");
+                    return ResponseUtils.Error<AuthResponseDto>(400, "Username is already taken");
                 }
             }
 
@@ -497,14 +497,14 @@ public class AuthService(
             // Permission check: Admin can update anyone, regular users can only update themselves
             if (!isAdmin && currentUserId != targetUserId)
             {
-                return ResponseUtils.Error<bool>(403, "Access denied: You can only update your own information");
+                return ResponseUtils.Error<bool>(403, MessageKeys.AccessDenied);
             }
 
             // Get target user
             var targetUser = await userRepository.FirstOrDefaultAsync(u => u.Id == targetUserId);
             if (targetUser == null)
             {
-                return ResponseUtils.Error<bool>(404, "User not found");
+                return ResponseUtils.Error<bool>(404, MessageKeys.UserNotFound);
             }
 
             // Check if email is being changed and if it's already in use
@@ -513,7 +513,7 @@ public class AuthService(
                 var existingUser = await userRepository.FirstOrDefaultAsync(u => u.Email == updateUserDto.Email && u.Id != targetUserId);
                 if (existingUser != null)
                 {
-                    return ResponseUtils.Error<bool>(400, "Email is already in use");
+                    return ResponseUtils.Error<bool>(400, MessageKeys.EmailAlreadyExists);
                 }
                 targetUser.Email = updateUserDto.Email;
             }
@@ -524,7 +524,7 @@ public class AuthService(
                 var existingUsername = await userRepository.FirstOrDefaultAsync(u => u.UserName == updateUserDto.UserName && u.Id != targetUserId);
                 if (existingUsername != null)
                 {
-                    return ResponseUtils.Error<bool>(400, "Username is already in use");
+                    return ResponseUtils.Error<bool>(400, MessageKeys.UserNameTaken);
                 }
                 targetUser.UserName = updateUserDto.UserName;
             }
@@ -554,7 +554,7 @@ public class AuthService(
                         string.IsNullOrEmpty(targetUser.PasswordHash) ||
                         !passwordHasher.VerifyPassword(updateUserDto.CurrentPassword, targetUser.PasswordHash))
                     {
-                        return ResponseUtils.Error<bool>(400, "Current password is incorrect");
+                        return ResponseUtils.Error<bool>(400, MessageKeys.CurrentPasswordIncorrect);
                     }
                 }
 
@@ -570,12 +570,12 @@ public class AuthService(
             await commandRepository.SaveChangesAsync(false, default);
 
             logger.LogInformation("User {TargetUserId} updated by {CurrentUserId}", targetUserId, currentUserId);
-            return ResponseUtils.Success(true);
+            return ResponseUtils.Success(true, MessageKeys.UserUpdatedSuccessfully);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error updating user {TargetUserId} by {CurrentUserId}", targetUserId, currentUserId);
-            return ResponseUtils.Error<bool>(500, "User update failed: An unexpected error occurred during update");
+            return ResponseUtils.Error<bool>(500, MessageKeys.Error);
         }
     }
 

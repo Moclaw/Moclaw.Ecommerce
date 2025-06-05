@@ -59,12 +59,6 @@ builder
 
 var app = builder.Build();
 
-// Auto-migrate database
-// using (var scope = app.Services.CreateScope())
-// {
-//     var db = scope.ServiceProvider.GetRequiredService<EcomCore.Infrastructure.Persistence.EfCore.ApplicationDbContext>();
-//     db.Database.Migrate();
-// }
 app.MapMinimalEndpoints(versioningOptions, typeof(Program).Assembly);
 
 if (app.Environment.IsDevelopment())

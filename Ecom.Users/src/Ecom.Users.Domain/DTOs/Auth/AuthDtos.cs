@@ -40,7 +40,6 @@ public record RegisterDto
     [Phone]
     public string? PhoneNumber { get; init; }
 
-    [StringLength(100)]
     public string? UserName { get; init; }
 }
 

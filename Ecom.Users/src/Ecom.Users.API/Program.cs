@@ -1,19 +1,20 @@
-using System.Text;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Ecom.Users.API.Middleware;
 using Ecom.Users.Application;
 using Ecom.Users.Domain.ValueObjects;
 using Ecom.Users.Infrastructure;
+using Ecom.Users.Infrastructure.Persistence.EfCore;
 using Host;
 using Host.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MinimalAPI;
 using MinimalAPI.OpenApi;
 using MinimalAPI.SwaggerUI;
 using Serilog;
-using Services.Autofac.Extensions;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -91,7 +92,6 @@ builder.Host.ConfigureContainer<ContainerBuilder>(containerBuilder =>
     // Register application and infrastructure services with Autofac
     containerBuilder.AddApplicationServices().AddInfrastructureServices();
 });
-
 var app = builder.Build();
 
 app.MapMinimalEndpoints(versioningOptions, typeof(Program).Assembly);

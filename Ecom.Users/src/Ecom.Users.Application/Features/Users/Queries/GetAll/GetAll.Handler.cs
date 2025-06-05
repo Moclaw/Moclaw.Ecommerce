@@ -1,4 +1,6 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Users.Queries.GetAll
 {
@@ -22,7 +24,7 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetAll
                 return new ResponseCollection<GetAllResponse>(
                     IsSuccess: false,
                     400,
-                    result.Message ?? "Failed to retrieve users",
+                    result.Message ?? MessageKeys.Error,
                     Data: []
                 );
             }
@@ -41,7 +43,7 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetAll
             return new ResponseCollection<GetAllResponse>(
                 IsSuccess: true,
                 200,
-                "Users retrieved successfully",
+                MessageKeys.Success,
                 Data: users
             );
         }

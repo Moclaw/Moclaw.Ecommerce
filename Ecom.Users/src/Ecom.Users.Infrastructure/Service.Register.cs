@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Services.Autofac.Extensions;
 
 namespace Ecom.Users.Infrastructure
@@ -22,7 +23,12 @@ namespace Ecom.Users.Infrastructure
 
             // Register DbContext
             services.AddDbContext<ApplicationDbContext>(options =>
-                options.UseSqlite(configuration.GetConnectionString("DefaultConnection") ?? "Data Source=ecom_users.db"));
+            {
+                options.UseNpgsql(
+                    configuration.GetConnectionString("DefaultConnection")
+                ).EnableSensitiveDataLogging()
+                .LogTo(Console.WriteLine, LogLevel.Information);
+            });
 
             services.AddScoped<ApplicationDbContext>();
 

@@ -1,4 +1,6 @@
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.Interfaces;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
 {
@@ -14,12 +16,9 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
             var userResult = await userService.GetUserByIdAsync(request.UserId);
             if (!userResult.IsSuccess || userResult.Data == null)
             {
-                return new Response<ValidatePermissionResponse>(
-                    IsSuccess: false,
+                return ResponseUtils.Error<ValidatePermissionResponse>(
                     404,
-                    "User not found",
-                    Data: null
-                );
+                    MessageKeys.UserNotFound);
             }
 
             var rolesResult = await userService.GetUserRolesAsync(request.UserId);
@@ -49,7 +48,7 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
                 }
                 else
                 {
-                    reason = "No ownership or admin access";
+                    reason = MessageKeys.AccessDenied;
                 }
             }
             else
@@ -67,12 +66,7 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
                 Reason = reason
             };
 
-            return new Response<ValidatePermissionResponse>(
-                IsSuccess: true,
-                200,
-                "Permission validation completed",
-                Data: response
-            );
+            return ResponseUtils.Success(response, MessageKeys.Success);
         }
     }
 }
