@@ -29,7 +29,7 @@ public class AuthService(
             var existingUser = await userRepository.FirstOrDefaultAsync(u => u.Email == registerDto.Email);
             if (existingUser != null)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "User with this email already exists");
+                return ResponseUtils.Error<AuthResponseDto>(409, MessageKeys.EmailAlreadyExists);
             }
 
             // Check username availability
@@ -38,7 +38,7 @@ public class AuthService(
                 var existingUsername = await userRepository.FirstOrDefaultAsync(u => u.UserName == registerDto.UserName);
                 if (existingUsername != null)
                 {
-                    return ResponseUtils.Error<AuthResponseDto>(400, "Username is already taken");
+                    return ResponseUtils.Error<AuthResponseDto>(400, MessageKeys.UserNameTaken);
                 }
             }
 
@@ -108,7 +108,7 @@ public class AuthService(
             {
                 UserId = user.Id,
                 Email = user.Email,
-                Username = user.UserName ?? user.Email,
+                UserName = user.UserName ?? user.Email,
                 FirstName = user.FirstName,
                 LastName = user.LastName,
                 AccessToken = accessToken,
@@ -116,12 +116,12 @@ public class AuthService(
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
                 Roles = [defaultRole.Name],
                 Permissions = permissions.Select(p => p.FullPermission)
-            });
+            }, MessageKeys.Success);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during user registration");
-            return ResponseUtils.Error<AuthResponseDto>(500, "Registration failed: An unexpected error occurred during registration");
+            return ResponseUtils.Error<AuthResponseDto>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -135,13 +135,19 @@ public class AuthService(
 
             if (user == null)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "Login failed: Invalid email or password");
+                return ResponseUtils.Error<AuthResponseDto>(400, MessageKeys.InvalidCredentials);
+            }
+
+            // Check email confirmation
+            if (!user.EmailConfirmed)
+            {
+                return ResponseUtils.Error<AuthResponseDto>(400, MessageKeys.EmailNotConfirmed);
             }
 
             // Check lockout
             if (user.LockoutEnabled && user.LockoutEnd.HasValue && user.LockoutEnd > DateTimeOffset.UtcNow)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "Login failed: Account is locked. Please try again later or contact support");
+                return ResponseUtils.Error<AuthResponseDto>(401, MessageKeys.AccountLocked);
             }
 
             // Verify password if local
@@ -160,12 +166,12 @@ public class AuthService(
                     await commandRepository.UpdateAsync(user);
                     await commandRepository.SaveChangesAsync(false, default);
 
-                    return ResponseUtils.Error<AuthResponseDto>(400, "Login failed: Invalid email or password");
+                    return ResponseUtils.Error<AuthResponseDto>(401, MessageKeys.InvalidCredentials);
                 }
             }
             else
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, $"Login failed: This account uses {user.Provider} authentication");
+                return ResponseUtils.Error<AuthResponseDto>(401, $"This account uses {user.Provider} authentication");
             }
 
             // Reset failures
@@ -189,7 +195,7 @@ public class AuthService(
             {
                 UserId = user.Id,
                 Email = user.Email,
-                Username = user.UserName ?? user.Email,
+                UserName = user.UserName ?? user.Email,
                 FirstName = user.FirstName ?? string.Empty,
                 LastName = user.LastName ?? string.Empty,
                 AccessToken = accessToken,
@@ -197,12 +203,12 @@ public class AuthService(
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
                 Roles = user.UserRoles.Select(ur => ur.Role.Name),
                 Permissions = permissions.Select(p => p.FullPermission)
-            });
+            }, MessageKeys.Success);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during user login");
-            return ResponseUtils.Error<AuthResponseDto>(500, "Login failed: An unexpected error occurred during login");
+            return ResponseUtils.Error<AuthResponseDto>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -214,12 +220,17 @@ public class AuthService(
 
             if (refreshToken == null)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "Token refresh failed: Invalid refresh token");
+                return ResponseUtils.Error<AuthResponseDto>(401, MessageKeys.InvalidToken);
             }
 
-            if (refreshToken.IsUsed || refreshToken.IsRevoked || refreshToken.ExpiryDate <= DateTimeOffset.UtcNow)
+            if (refreshToken.IsUsed || refreshToken.IsRevoked)
             {
-                return ResponseUtils.Error<AuthResponseDto>(400, "Token refresh failed: Refresh token is invalid or expired");
+                return ResponseUtils.Error<AuthResponseDto>(401, MessageKeys.InvalidToken);
+            }
+
+            if (refreshToken.ExpiryDate <= DateTimeOffset.UtcNow)
+            {
+                return ResponseUtils.Error<AuthResponseDto>(401, MessageKeys.TokenExpired);
             }
 
             var user = await userRepository
@@ -229,7 +240,7 @@ public class AuthService(
 
             if (user == null)
             {
-                return ResponseUtils.Error<AuthResponseDto>(404, "Token refresh failed: User not found");
+                return ResponseUtils.Error<AuthResponseDto>(404, MessageKeys.UserNotFound);
             }
 
             refreshToken.IsUsed = true;
@@ -251,7 +262,7 @@ public class AuthService(
             {
                 UserId = user.Id,
                 Email = user.Email,
-                Username = user.UserName ?? user.Email,
+                UserName = user.UserName ?? user.Email,
                 FirstName = user?.FirstName ?? string.Empty,
                 LastName = user?.LastName ?? string.Empty,
                 AccessToken = accessToken,
@@ -259,12 +270,12 @@ public class AuthService(
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
                 Roles = user?.UserRoles?.Select(ur => ur.Role.Name) ?? [],
                 Permissions = permissions.Select(p => p.FullPermission)
-            });
+            }, MessageKeys.Success);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during token refresh");
-            return ResponseUtils.Error<AuthResponseDto>(500, "Token refresh failed: An unexpected error occurred during token refresh");
+            return ResponseUtils.Error<AuthResponseDto>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -357,10 +368,10 @@ public class AuthService(
         var jwtId = Guid.NewGuid().ToString();
         var accessToken = jwtService.GenerateAccessToken(user, permissions.Select(p => p.FullPermission));
         var refreshToken = jwtService.GenerateRefreshToken(user, jwtId);
-        
+
         await commandRepository.AddAsync(refreshToken);
         await commandRepository.SaveChangesAsync(false, default);
-        
+
         return (accessToken, refreshToken.Token);
     }
 
@@ -473,7 +484,7 @@ public class AuthService(
             {
                 UserId = existingUser.Id,
                 Email = existingUser.Email,
-                Username = existingUser.UserName ?? existingUser.Email,
+                UserName = existingUser.UserName ?? existingUser.Email,
                 FirstName = existingUser.FirstName ?? string.Empty,
                 LastName = existingUser.LastName ?? string.Empty,
                 AccessToken = accessToken,
@@ -550,7 +561,7 @@ public class AuthService(
                 // Verify current password if not admin
                 if (!isAdmin)
                 {
-                    if (string.IsNullOrEmpty(updateUserDto.CurrentPassword) || 
+                    if (string.IsNullOrEmpty(updateUserDto.CurrentPassword) ||
                         string.IsNullOrEmpty(targetUser.PasswordHash) ||
                         !passwordHasher.VerifyPassword(updateUserDto.CurrentPassword, targetUser.PasswordHash))
                     {
@@ -570,7 +581,7 @@ public class AuthService(
             await commandRepository.SaveChangesAsync(false, default);
 
             logger.LogInformation("User {TargetUserId} updated by {CurrentUserId}", targetUserId, currentUserId);
-            return ResponseUtils.Success(true, MessageKeys.UserUpdatedSuccessfully);
+            return ResponseUtils.Success(true, MessageKeys.Success);
         }
         catch (Exception ex)
         {

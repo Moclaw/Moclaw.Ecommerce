@@ -29,7 +29,7 @@ public class UserService(
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(404,
+                return ResponseUtils.Error<UserDto>(204,
                     MessageKeys.UserNotFound);
             }
 
@@ -39,7 +39,7 @@ public class UserService(
         {
             logger.LogError(ex, "Error getting user by ID {UserId}", userId);
             return ResponseUtils.Error<UserDto>(500,
-                MessageKeys.Error);
+                MessageKeys.InternalServerError);
         }
     }
 
@@ -47,12 +47,18 @@ public class UserService(
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return ResponseUtils.Error<UserDto>(400,
+                    MessageKeys.EmailRequired);
+            }
+
             var user = await userRepository
                 .FirstOrDefaultAsync(u => u.Email == email);
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(404,
+                return ResponseUtils.Error<UserDto>(204,
                     MessageKeys.UserNotFound);
             }
 
@@ -62,7 +68,7 @@ public class UserService(
         {
             logger.LogError(ex, "Error getting user by email {Email}", email);
             return ResponseUtils.Error<UserDto>(500,
-                MessageKeys.Error);
+                MessageKeys.InternalServerError);
         }
     }
 
@@ -92,17 +98,19 @@ public class UserService(
                     Provider = c.Provider ?? string.Empty
                 }),
                 paging: new Pagination(default, pageNumber, pageSize)
-                );
+            );
 
-            return ResponseUtils.Success(rs.Entities,
-pagination: rs.Pagination);
+            if (rs.Entities == null || !rs.Entities.Any())
+            {
+                return ResponseUtils.Success<UserDto>([], 204, MessageKeys.NotFound, rs.Pagination);
+            }
+
+            return ResponseUtils.Success(rs.Entities, 200, MessageKeys.Success, rs.Pagination);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error getting paginated users");
-            return new ResponseCollection<UserDto>(
-                    false, 500, ex.Message, []
-                );
+            return ResponseUtils.Error<UserDto>([], 500, MessageKeys.InternalServerError);
         }
     }
 
@@ -115,7 +123,7 @@ pagination: rs.Pagination);
 
             if (user == null)
             {
-                return ResponseUtils.Error<UserDto>(404, 
+                return ResponseUtils.Error<UserDto>(204,
                     MessageKeys.UserNotFound);
             }
 
@@ -123,9 +131,9 @@ pagination: rs.Pagination);
             if (!string.IsNullOrEmpty(updateUserDto.UserName) && updateUserDto.UserName != user.UserName)
             {
                 var existingUsername = await userRepository
-                    .FirstOrDefaultAsync(u => u.UserName == updateUserDto.UserName);
+                    .AnyAsync(u => !string.IsNullOrEmpty(u.UserName) && u.UserName == updateUserDto.UserName && u.Id != userId);
 
-                if (existingUsername != null)
+                if (existingUsername)
                 {
                     return ResponseUtils.Error<UserDto>(
                       400, MessageKeys.UserNameTaken);
@@ -152,7 +160,7 @@ pagination: rs.Pagination);
             await commandRepository.UpdateAsync(user);
             await commandRepository.SaveChangesAsync(default);
 
-            return ResponseUtils.Success(MapToDto(user), MessageKeys.UserUpdatedSuccessfully);
+            return ResponseUtils.Success(MapToDto(user), MessageKeys.Success);
         }
         catch (Exception ex)
         {
@@ -286,7 +294,7 @@ pagination: rs.Pagination);
             if (user == null)
             {
                 return ResponseUtils.Error<bool>(204,
-                    $"User does not exist");
+                    MessageKeys.UserNotFound);
             }
 
             // Check if role exists
@@ -296,7 +304,7 @@ pagination: rs.Pagination);
             if (role == null)
             {
                 return ResponseUtils.Error<bool>(204,
-                    "Role does not exist");
+                   MessageKeys.RoleNotFound);
             }
 
             // Check if user already has this role
@@ -326,8 +334,7 @@ pagination: rs.Pagination);
         catch (Exception ex)
         {
             logger.LogError(ex, "Error assigning role {RoleId} to user {UserId}", roleId, userId);
-            return ResponseUtils.Error<bool>(500,
-                "Error assigning role to user");
+            return ResponseUtils.Error<bool>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -353,8 +360,7 @@ pagination: rs.Pagination);
         catch (Exception ex)
         {
             logger.LogError(ex, "Error removing role {RoleId} from user {UserId}", roleId, userId);
-            return ResponseUtils.Error<bool>(500,
-                "Error removing role from user");
+            return ResponseUtils.Error<bool>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -385,8 +391,7 @@ pagination: rs.Pagination);
         catch (Exception ex)
         {
             logger.LogError(ex, "Error deleting user {UserId}", userId);
-            return ResponseUtils.Error<bool>(500,
-                "Error deleting user");
+            return ResponseUtils.Error<bool>(500, MessageKeys.InternalServerError);
         }
     }
 
@@ -396,10 +401,9 @@ pagination: rs.Pagination);
         {
             // Get all roles for user
             var userRoleIdsResult = await userRoleRepository.GetAllAsync(
-                ur => ur.UserId == userId,
-                projector: p => p.Select(c => c.RoleId)
+                ur => ur.UserId == userId
             );
-            var userRoleIds = userRoleIdsResult.Entities.ToList();
+            var userRoleIds = userRoleIdsResult.Entities.Select(ur => ur.RoleId).ToList();
 
             if (userRoleIds.Count == 0)
             {

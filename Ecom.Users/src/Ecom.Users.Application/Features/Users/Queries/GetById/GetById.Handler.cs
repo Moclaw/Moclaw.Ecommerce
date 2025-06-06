@@ -14,17 +14,17 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetById
         )
         {
             var userResult = await userService.GetUserByIdAsync(request.Id);
-            
+
             if (!userResult.IsSuccess || userResult.Data == null)
             {
                 return ResponseUtils.Error<GetByIdResponse>(
-                    404,
-                    MessageKeys.UserNotFound);
+                    400,
+                   message: userResult.Message ?? MessageKeys.UserNotFound);
             }
 
             var user = userResult.Data;
             var rolesResult = await userService.GetUserRolesAsync(request.Id);
-            
+
             var response = new GetByIdResponse
             {
                 Id = user.Id,
@@ -33,8 +33,8 @@ namespace Ecom.Users.Application.Features.Users.Queries.GetById
                 LastName = user.LastName,
                 PhoneNumber = user.PhoneNumber,
                 IsActive = user.TwoFactorEnabled,
-                CreatedAt = user.CreatedAt.DateTime,
-                UpdatedAt = user.UpdatedAt.Value.DateTime,
+                CreatedAt = user.CreatedAt,
+                UpdatedAt = user.UpdatedAt,
                 Roles = rolesResult.IsSuccess ? rolesResult.Data?.Select(r => r.Name).ToList() ?? [] : []
             };
 

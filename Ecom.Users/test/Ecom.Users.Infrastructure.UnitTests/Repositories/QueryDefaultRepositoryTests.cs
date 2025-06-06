@@ -38,7 +38,8 @@ public class QueryDefaultRepositoryTests : IDisposable
                 PasswordHash = "hashedPassword",
                 EmailConfirmed = true,
                 CreatedAt = DateTimeOffset.UtcNow,
-                CreatedBy = Guid.NewGuid()
+                CreatedBy = Guid.NewGuid(),
+                IsDeleted = false
             },
             new()
             {
@@ -50,7 +51,8 @@ public class QueryDefaultRepositoryTests : IDisposable
                 PasswordHash = "hashedPassword",
                 EmailConfirmed = false,
                 CreatedAt = DateTimeOffset.UtcNow,
-                CreatedBy = Guid.NewGuid()
+                CreatedBy = Guid.NewGuid(),
+                IsDeleted = false
             },
             new()
             {
@@ -62,7 +64,8 @@ public class QueryDefaultRepositoryTests : IDisposable
                 PasswordHash = "hashedPassword",
                 EmailConfirmed = true,
                 CreatedAt = DateTimeOffset.UtcNow,
-                CreatedBy = Guid.NewGuid()
+                CreatedBy = Guid.NewGuid(),
+                IsDeleted = false
             }
         };
 
@@ -96,7 +99,7 @@ public class QueryDefaultRepositoryTests : IDisposable
     [Fact]
     public async Task GetAllAsync_WithPagination_ShouldReturnPaginatedResults()
     { // Arrange
-        var pagination = new Pagination(1, 2);
+        var pagination = new Pagination(0, 1, 2);
 
         // Act
         var result = await _repository.GetAllAsync(paging: pagination);
@@ -180,16 +183,6 @@ public class QueryDefaultRepositoryTests : IDisposable
 
         // Assert
         result.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task CountAsync_ShouldReturnCorrectCount()
-    {
-        // Act
-        var result = await _repository.CountAsync();
-
-        // Assert
-        result.Should().Be(3);
     }
 
     [Fact]

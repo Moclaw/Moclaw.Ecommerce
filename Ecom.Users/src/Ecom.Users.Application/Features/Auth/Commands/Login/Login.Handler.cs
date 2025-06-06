@@ -38,7 +38,7 @@ namespace Ecom.Users.Application.Features.Auth.Commands.Login
                 Roles = [.. authResponse.Roles]
             };
 
-            return ResponseUtils.Success(response, MessageKeys.LoginSuccess);
+            return ResponseUtils.Success(response, MessageKeys.Success);
         }
     }
 }

@@ -1,4 +1,5 @@
 using Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs.Users;
 using Ecom.Users.Domain.Interfaces;
 using FluentAssertions;
@@ -42,7 +43,7 @@ public class ValidatePermissionHandlerTests
         var roleDto = new RoleDto
         {
             Id = Guid.NewGuid(),
-            Name = "Admin"
+            Name = AuthConstants.Roles.Admin
         };
 
         var userResponse = ResponseUtils.Success(userDto);
@@ -60,14 +61,14 @@ public class ValidatePermissionHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
         result.StatusCode.Should().Be(200);
-        result.Message.Should().Be("Permission validation completed");
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeTrue();
         result.Data.Action.Should().Be(request.Action);
         result.Data.Resource.Should().Be(request.Resource);
         result.Data.UserId.Should().Be(userId);
-        result.Data.Roles.Should().Contain("Admin");
-        result.Data.Reason.Should().Be("Admin role");
+        result.Data.Roles.Should().Contain(AuthConstants.Roles.Admin);
+        result.Data.Reason.Should().Be(MessageKeys.AdminRole);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -115,7 +116,7 @@ public class ValidatePermissionHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeTrue();
-        result.Data.Reason.Should().Be("Resource ownership");
+        result.Data.Reason.Should().Be(MessageKeys.ResourceOwnership);
         result.Data.Roles.Should().Contain("User");
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
@@ -164,7 +165,7 @@ public class ValidatePermissionHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeTrue();
-        result.Data.Reason.Should().Be("Self read access");
+        result.Data.Reason.Should().Be(MessageKeys.SelfReadAccess);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -194,7 +195,7 @@ public class ValidatePermissionHandlerTests
         var roleDto = new RoleDto
         {
             Id = Guid.NewGuid(),
-            Name = "User"
+            Name = AuthConstants.Roles.User
         };
 
         var userResponse = ResponseUtils.Success(userDto);
@@ -213,7 +214,7 @@ public class ValidatePermissionHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeFalse();
-        result.Data.Reason.Should().Be("No ownership or admin access");
+        result.Data.Reason.Should().Be(MessageKeys.AccessDenied);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -261,7 +262,7 @@ public class ValidatePermissionHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeFalse();
-        result.Data.Reason.Should().Be("Resource not supported");
+        result.Data.Reason.Should().Be(MessageKeys.ResourceNotSupported);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -279,7 +280,7 @@ public class ValidatePermissionHandlerTests
             Resource = "user"
         };
 
-        var userResponse = ResponseUtils.Error<UserDto>(404, "User not found");
+        var userResponse = ResponseUtils.Error<UserDto>(404, MessageKeys.UserNotFound);
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(userId))
             .ReturnsAsync(userResponse);
@@ -291,7 +292,7 @@ public class ValidatePermissionHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
@@ -313,7 +314,7 @@ public class ValidatePermissionHandlerTests
         var userResponse = new Response<UserDto>(
             IsSuccess: true,
             200,
-            "Success",
+            MessageKeys.Success,
             Data: null
         );
 
@@ -327,7 +328,7 @@ public class ValidatePermissionHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
@@ -354,17 +355,13 @@ public class ValidatePermissionHandlerTests
         };
 
         var userResponse = ResponseUtils.Success(userDto);
-        var rolesResponse = ResponseUtils.Error<List<RoleDto>>(400, "Failed to get roles");
+        var rolesResponse = ResponseUtils.Error<IEnumerable<RoleDto>>(400, "Failed to get roles");
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(userId))
             .ReturnsAsync(userResponse);
-     
+ 
         _mockUserService.Setup(x => x.GetUserRolesAsync(userId))
-            .ReturnsAsync(ResponseUtils.Success<IEnumerable<RoleDto>>([ new RoleDto
-            {
-                Id = Guid.NewGuid(),
-                Name = "User"
-            }]));
+            .ReturnsAsync(rolesResponse);
         // Act
         var result = await _handler.Handle(request, CancellationToken.None);
 
@@ -374,7 +371,7 @@ public class ValidatePermissionHandlerTests
         result.Data.Should().NotBeNull();
         result.Data!.Roles.Should().BeEmpty();
         result.Data.HasPermission.Should().BeTrue(); // Self read access
-        result.Data.Reason.Should().Be("Self read access");
+        result.Data.Reason.Should().Be(MessageKeys.SelfReadAccess);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -402,9 +399,9 @@ public class ValidatePermissionHandlerTests
 
         var roles = new List<RoleDto>
         {
-            new() { Id = Guid.NewGuid(), Name = "User" },
-            new() { Id = Guid.NewGuid(), Name = "Employee" },
-            new() { Id = Guid.NewGuid(), Name = "Admin" }
+            new() { Id = Guid.NewGuid(), Name = AuthConstants.Roles.User },
+            new() { Id = Guid.NewGuid(), Name = AuthConstants.Roles.Employee },
+            new() { Id = Guid.NewGuid(), Name = AuthConstants.Roles.Admin }
         };
 
         var userResponse = ResponseUtils.Success(userDto);
@@ -423,11 +420,11 @@ public class ValidatePermissionHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.HasPermission.Should().BeTrue();
-        result.Data.Reason.Should().Be("Admin role");
+        result.Data.Reason.Should().Be(MessageKeys.AdminRole);
         result.Data.Roles.Should().HaveCount(3);
-        result.Data.Roles.Should().Contain("Admin");
-        result.Data.Roles.Should().Contain("User");
-        result.Data.Roles.Should().Contain("Employee");
+        result.Data.Roles.Should().Contain(AuthConstants.Roles.Admin);
+        result.Data.Roles.Should().Contain(AuthConstants.Roles.User);
+        result.Data.Roles.Should().Contain(AuthConstants.Roles.Employee);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);
@@ -603,7 +600,7 @@ public class ValidatePermissionHandlerTests
         result.Data.Should().NotBeNull();
         result.Data!.Roles.Should().BeEmpty();
         result.Data.HasPermission.Should().BeTrue(); // Self read access
-        result.Data.Reason.Should().Be("Self read access");
+        result.Data.Reason.Should().Be(MessageKeys.SelfReadAccess);
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
         _mockUserService.Verify(x => x.GetUserRolesAsync(userId), Times.Once);

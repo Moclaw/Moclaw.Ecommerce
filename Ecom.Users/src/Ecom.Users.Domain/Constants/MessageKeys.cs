@@ -23,7 +23,6 @@ namespace Ecom.Users.Domain.Constants
         public const string UserNotFound = "User not found";
         
         // Auth messages
-        public const string UserUpdatedSuccessfully = "User updated successfully";
         public const string AccessDenied = "Access denied: You can only update your own information";
         public const string CurrentPasswordIncorrect = "Current password is incorrect";
         public const string EmailAlreadyExists = "Email already exists";
@@ -31,20 +30,25 @@ namespace Ecom.Users.Domain.Constants
         public const string OperationCancelled = "Operation cancelled";
         
         // Registration messages
-        public const string RegisterSuccess = "User registered successfully";
         public const string PasswordMismatch = "Password and confirmation password do not match";
         public const string UserNameTaken = "Username is already taken";
         public const string EmailRequired = "Email is required";
         public const string PasswordRequired = "Password is required";
-        
+
         // Token messages
-        public const string TokenRefreshedSuccessfully = "Token refreshed successfully";
         public const string InvalidToken = "Invalid token";
         public const string TokenExpired = "Token expired";
         
         // Login messages
-        public const string LoginSuccess = "Login successful";
         public const string InvalidCredentials = "Invalid email or password";
         public const string AccountLocked = "Account is locked";
+        public const string EmailNotConfirmed = "Email not confirmed. Please check your email for confirmation instructions.";
+        
+        // Permission messages
+        public const string AdminRole = "Admin role";
+        public const string ResourceOwnership = "Resource ownership";
+        public const string SelfReadAccess = "Self read access";
+        public const string ResourceNotSupported = "Resource not supported";
+        public const string RoleNotFound = "Role not found";
     }
 }

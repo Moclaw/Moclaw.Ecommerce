@@ -1,6 +1,7 @@
 using Ecom.Users.Application.Services;
 using Ecom.Users.Domain.Entities;
 using Ecom.Users.Domain.ValueObjects;
+using Ecom.Users.Domain.Constants;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 using System.IdentityModel.Tokens.Jwt;
@@ -68,20 +69,20 @@ public class JwtServiceTests
         // Verify basic claims
         jwtToken.Claims.Should().Contain(c => c.Type == JwtRegisteredClaimNames.Sub && c.Value == userId.ToString());
         jwtToken.Claims.Should().Contain(c => c.Type == JwtRegisteredClaimNames.Email && c.Value == user.Email);
-        jwtToken.Claims.Should().Contain(c => c.Type == "userId" && c.Value == userId.ToString());
-        jwtToken.Claims.Should().Contain(c => c.Type == "email" && c.Value == user.Email);
-        jwtToken.Claims.Should().Contain(c => c.Type == "username" && c.Value == user.UserName);
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.UserId && c.Value == userId.ToString());
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Email && c.Value == user.Email);
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.UserName && c.Value == user.UserName);
 
         // Verify role claims
         jwtToken.Claims.Should().Contain(c => c.Type == ClaimTypes.Role && c.Value == "Admin");
         jwtToken.Claims.Should().Contain(c => c.Type == ClaimTypes.Role && c.Value == "User");
-        jwtToken.Claims.Should().Contain(c => c.Type == "role" && c.Value == "Admin");
-        jwtToken.Claims.Should().Contain(c => c.Type == "role" && c.Value == "User");
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Role && c.Value == "Admin");
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Role && c.Value == "User");
 
         // Verify permission claims
-        jwtToken.Claims.Should().Contain(c => c.Type == "permission" && c.Value == "read:users");
-        jwtToken.Claims.Should().Contain(c => c.Type == "permission" && c.Value == "write:users");
-        jwtToken.Claims.Should().Contain(c => c.Type == "permission" && c.Value == "delete:users");
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Permission && c.Value == "read:users");
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Permission && c.Value == "write:users");
+        jwtToken.Claims.Should().Contain(c => c.Type == AuthConstants.ClaimTypes.Permission && c.Value == "delete:users");
 
         // Verify token metadata
         jwtToken.Issuer.Should().Be(_jwtOptions.Issuer);
@@ -119,8 +120,8 @@ public class JwtServiceTests
 
         // Should not have role or permission claims
         jwtToken.Claims.Should().NotContain(c => c.Type == ClaimTypes.Role);
-        jwtToken.Claims.Should().NotContain(c => c.Type == "role");
-        jwtToken.Claims.Should().NotContain(c => c.Type == "permission");
+        jwtToken.Claims.Should().NotContain(c => c.Type == AuthConstants.ClaimTypes.Role);
+        jwtToken.Claims.Should().NotContain(c => c.Type == AuthConstants.ClaimTypes.Permission);
     }
 
     [Fact]
@@ -182,13 +183,47 @@ public class JwtServiceTests
     [InlineData("")]
     [InlineData(null)]
     [InlineData("   ")]
-    public void ValidateToken_WithNullOrEmptyToken_ShouldReturnNull(string? token)
+    public void ValidateToken_WithNullOrEmptyToken_ShouldReturnFalse(string? token)
     {
         // Act
-        var principal = _jwtService.ValidateToken(token!);
+        var isValid = _jwtService.ValidateToken(token!);
 
         // Assert
-        principal.Should().BeTrue("Null or empty token should return null, but it did not.");
+        isValid.Should().BeFalse(MessageKeys.InvalidToken);
+    }
+
+    [Fact]
+    public void ValidateToken_WithValidToken_ShouldReturnTrue()
+    {
+        // Arrange
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = "test@example.com",
+            UserName = "testuser",
+            UserRoles = []
+        };
+
+        var token = _jwtService.GenerateAccessToken(user, []);
+
+        // Act
+        var isValid = _jwtService.ValidateToken(token);
+
+        // Assert
+        isValid.Should().BeTrue("Valid token should be accepted");
+    }
+
+    [Fact]
+    public void ValidateToken_WithInvalidToken_ShouldReturnFalse()
+    {
+        // Arrange
+        var invalidToken = "invalid.jwt.token";
+
+        // Act
+        var isValid = _jwtService.ValidateToken(invalidToken);
+
+        // Assert
+        isValid.Should().BeFalse(MessageKeys.InvalidToken);
     }
 
     [Fact]
@@ -217,12 +252,47 @@ public class JwtServiceTests
     [InlineData("")]
     [InlineData(null)]
     [InlineData("invalid.token")]
-    public void GetJwtId_FromInvalidToken_ShouldReturnNull(string? token)
+    public void GetJwtId_FromInvalidToken_ShouldThrowException(string? token)
     {
+        // Act & Assert
+        var act = () => _jwtService.GetJwtId(token!);
+        act.Should().Throw<Exception>(MessageKeys.InvalidToken);
+    }
+
+    [Fact]
+    public void GetPrincipalFromExpiredToken_WithValidExpiredToken_ShouldReturnPrincipal()
+    {
+        // Arrange
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = "test@example.com",
+            UserName = "testuser",
+            UserRoles = []
+        };
+
+        // Generate a token (it will be considered expired by the method since ValidateLifetime = false)
+        var token = _jwtService.GenerateAccessToken(user, []);
+
         // Act
-        var jwtId = _jwtService.GetJwtId(token!);
+        var principal = _jwtService.GetPrincipalFromExpiredToken(token);
 
         // Assert
-        jwtId.Should().BeNull();
+        principal.Should().NotBeNull();
+        principal!.FindFirst(JwtRegisteredClaimNames.Sub)?.Value.Should().Be(user.Id.ToString());
+        principal.FindFirst(JwtRegisteredClaimNames.Email)?.Value.Should().Be(user.Email);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("invalid.token")]
+    public void GetPrincipalFromExpiredToken_WithInvalidToken_ShouldReturnNull(string? token)
+    {
+        // Act
+        var principal = _jwtService.GetPrincipalFromExpiredToken(token!);
+
+        // Assert
+        principal.Should().BeNull(MessageKeys.InvalidToken);
     }
 }

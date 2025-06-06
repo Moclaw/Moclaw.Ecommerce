@@ -210,7 +210,7 @@ namespace Ecom.Users.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_Permission_Module_Action_Resource",
                 table: "Permission",
-                columns: new[] { "Module", "Action", "Resource" },
+                columns: ["Module", "Action", "Resource"],
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -314,7 +314,7 @@ namespace Ecom.Users.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_RolePermission_RoleId_PermissionId",
                 table: "RolePermission",
-                columns: new[] { "RoleId", "PermissionId" },
+                columns: ["RoleId", "PermissionId"],
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -387,7 +387,7 @@ namespace Ecom.Users.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_UserRole_UserId_RoleId",
                 table: "UserRole",
-                columns: new[] { "UserId", "RoleId" },
+                columns: ["UserId", "RoleId"],
                 unique: true);
         }
 

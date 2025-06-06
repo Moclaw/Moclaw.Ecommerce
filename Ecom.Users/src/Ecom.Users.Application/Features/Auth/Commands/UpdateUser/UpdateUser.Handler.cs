@@ -46,7 +46,7 @@ namespace Ecom.Users.Application.Features.Auth.Commands.UpdateUser
 
             return ResponseUtils.Success(
                 response, 
-                result.Message ?? MessageKeys.UserUpdatedSuccessfully);
+                result.Message ?? MessageKeys.Success);
         }
     }
 }

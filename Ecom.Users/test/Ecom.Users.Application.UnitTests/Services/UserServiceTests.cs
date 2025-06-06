@@ -1,5 +1,6 @@
 using Domain.Builders;
 using Ecom.Users.Application.Services;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Entities;
 using Ecom.Users.Domain.Interfaces;
@@ -110,8 +111,8 @@ public class UserServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.StatusCode.Should().Be(204);
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
     }
 
@@ -127,15 +128,16 @@ public class UserServiceTests
             UserName = "testuser",
             FirstName = "John",
             LastName = "Doe",
-            EmailConfirmed = true
+            EmailConfirmed = true,
+            Provider = AuthConstants.Providers.Local,
         };
 
         _mockUserRepository.Setup(x => x.FirstOrDefaultAsync(
-    It.IsAny<Expression<Func<User, bool>>>(),
-    It.IsAny<Action<IFluentBuilder<User>>?>(),
-    It.IsAny<bool>(),
-    It.IsAny<CancellationToken>()
-)).ReturnsAsync((User?)null);
+            It.IsAny<Expression<Func<User, bool>>>(),
+            It.IsAny<Action<IFluentBuilder<User>>?>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync(user);
         // Act
         var result = await _userService.GetUserByEmailAsync(email);
 
@@ -166,8 +168,8 @@ public class UserServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.StatusCode.Should().Be(204);
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
     }
 
@@ -194,14 +196,21 @@ public class UserServiceTests
             PhoneNumber = "1234567890",
             EmailConfirmed = true,
             CreatedAt = DateTimeOffset.UtcNow.AddDays(-10),
-            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-5)
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-5),
+            Provider = AuthConstants.Providers.Local,
         };
+
         _mockUserRepository.Setup(x => x.FirstOrDefaultAsync(
             It.IsAny<Expression<Func<User, bool>>>(),
             It.IsAny<Action<IFluentBuilder<User>>?>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()
         )).ReturnsAsync(existingUser);
+
+        _mockUserRepository.Setup(x => x.AnyAsync(
+            It.IsAny<Expression<Func<User, bool>>>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync(false);
 
         _mockCommandRepository.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(1);
@@ -240,12 +249,11 @@ public class UserServiceTests
             LastName = "UpdatedLastName"
         };
 
-        _mockUserRepository.Setup(x =>
-        x.FirstOrDefaultAsync(
-        It.IsAny<Expression<Func<User, bool>>>(),
-        It.IsAny<Action<IFluentBuilder<User>>?>(),
-        It.IsAny<bool>(),
-        It.IsAny<CancellationToken>()
+        _mockUserRepository.Setup(x => x.FirstOrDefaultAsync(
+            It.IsAny<Expression<Func<User, bool>>>(),
+            It.IsAny<Action<IFluentBuilder<User>>?>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()
         )).ReturnsAsync((User?)null);
 
         // Act
@@ -254,8 +262,8 @@ public class UserServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.StatusCode.Should().Be(204);
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
 
         _mockCommandRepository.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
@@ -327,8 +335,8 @@ public class UserServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User does not exist");
+        result.StatusCode.Should().Be(204);
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeFalse();
 
         _mockCommandRepository.Verify(x => x.AddAsync(It.IsAny<UserRole>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -350,10 +358,10 @@ public class UserServiceTests
         };
 
         _mockUserRoleRepository.Setup(x => x.FirstOrDefaultAsync(
-    It.IsAny<Expression<Func<UserRole, bool>>>(),
-    It.IsAny<Action<IFluentBuilder<UserRole>>?>(),
-    It.IsAny<bool>(),
-    It.IsAny<CancellationToken>()))
+        It.IsAny<Expression<Func<UserRole, bool>>>(),
+        It.IsAny<Action<IFluentBuilder<UserRole>>?>(),
+        It.IsAny<bool>(),
+        It.IsAny<CancellationToken>()))
     .ReturnsAsync(userRole);
 
         _mockCommandRepository.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
@@ -367,7 +375,7 @@ public class UserServiceTests
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().BeTrue();
 
-        _mockCommandRepository.Verify(x => x.RemoveAsync(It.IsAny<UserRole>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockCommandRepository.Verify(x => x.DeleteAsync(It.IsAny<UserRole>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockCommandRepository.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -380,9 +388,43 @@ public class UserServiceTests
         var action = "Read";
         var resource = "TestResource";
 
+        var user = new User
+        {
+            Id = userId,
+            Email = "test@example.com",
+            UserName = "testuser",
+            FirstName = "John",
+            LastName = "Doe",
+            PhoneNumber = "1234567890",
+            EmailConfirmed = true,
+            PhoneNumberConfirmed = false,
+            TwoFactorEnabled = false,
+            CreatedAt = DateTimeOffset.UtcNow.AddDays(-10),
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            Provider = "Local"
+        };
+
+        _mockUserRepository.Setup(x => x.FirstOrDefaultAsync(
+            It.IsAny<Expression<Func<User, bool>>>(),
+            It.IsAny<Action<IFluentBuilder<User>>?>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+
+        var roleId = Guid.NewGuid();
         var userRoleIds = new List<UserRole>
         {
-            new() { RoleId = Guid.NewGuid() }
+            new() { RoleId = roleId, UserId = userId, Role = new Role { Id = roleId, Name = "TestRole" , RolePermissions = new List<RolePermission>
+            {
+                new() {
+                    Permission = new Permission
+                    {
+                        Module = module,
+                        Action = action,
+                        Resource = resource
+                    }
+                }
+            } } }
         };
 
         _mockUserRoleRepository.Setup(x => x.GetAllAsync(
@@ -391,7 +433,7 @@ public class UserServiceTests
             It.IsAny<Pagination>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()))
-            .ReturnsAsync((userRoleIds, new Pagination())); // Correctly return a tuple with IEnumerable<UserRole> and Pagination
+            .ReturnsAsync((userRoleIds, new Pagination()));
 
         _mockRolePermissionRepository.Setup(x => x.AnyAsync(
             It.IsAny<Expression<Func<RolePermission, bool>>>(),
@@ -425,7 +467,7 @@ public class UserServiceTests
             It.IsAny<Pagination>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()))
-            .ReturnsAsync((userRoleIds, new Pagination())); 
+            .ReturnsAsync((userRoleIds, new Pagination()));
 
         _mockRolePermissionRepository.Setup(x => x.AnyAsync(
             It.IsAny<Expression<Func<RolePermission, bool>>>(),
@@ -484,7 +526,7 @@ public class UserServiceTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("Email cannot be null or empty");
+        result.Message.Should().Be(MessageKeys.EmailRequired);
         result.Data.Should().BeNull();
 
         _mockUserRepository.Verify(x => x.FirstOrDefaultAsync(It.IsAny<Expression<Func<User, bool>>>(), It.IsAny<Action<IFluentBuilder<User>>?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);

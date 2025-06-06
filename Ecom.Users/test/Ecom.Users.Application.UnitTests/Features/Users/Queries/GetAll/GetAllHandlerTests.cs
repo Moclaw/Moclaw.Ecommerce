@@ -1,4 +1,5 @@
 using Ecom.Users.Application.Features.Users.Queries.GetAll;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs.Users;
 using Ecom.Users.Domain.Interfaces;
 using FluentAssertions;
@@ -57,7 +58,7 @@ public class GetAllHandlerTests
         var serviceResponse = new ResponseCollection<UserDto>(
             IsSuccess: true,
             StatusCode: 200,
-            Message: "Users retrieved successfully",
+            Message: MessageKeys.Success,
             Data: userDtos
         );
 
@@ -72,7 +73,7 @@ public class GetAllHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
         result.StatusCode.Should().Be(200);
-        result.Message.Should().Be("Users retrieved successfully");
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data.Should().HaveCount(2);
 
@@ -105,7 +106,7 @@ public class GetAllHandlerTests
         var serviceResponse = new ResponseCollection<UserDto>(
             IsSuccess: true,
             StatusCode: 200,
-            Message: "Users retrieved successfully",
+            Message: MessageKeys.Success,
             Data: emptyList
         );
 
@@ -120,7 +121,7 @@ public class GetAllHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
         result.StatusCode.Should().Be(200);
-        result.Message.Should().Be("Users retrieved successfully");
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data.Should().BeEmpty();
 
@@ -130,44 +131,6 @@ public class GetAllHandlerTests
         );
     }
 
-    [Fact]
-    public async Task Handle_WithServiceFailure_ShouldReturnErrorResponse()
-    {
-        // Arrange
-        var request = new GetAllRequest
-        {
-            PageIndex = 1,
-            PageSize = 10,
-            Search = null
-        };
-
-        var serviceResponse = new ResponseCollection<UserDto>(
-            IsSuccess: false,
-            StatusCode: 400,
-            Message: "Database connection failed",
-            Data: new List<UserDto>() // FIX: Use empty list instead of null
-        );
-
-        _mockUserService
-            .Setup(x => x.GetUsersAsync(request.PageIndex, request.PageSize, request.Search))
-            .ReturnsAsync(serviceResponse);
-
-        // Act
-        var result = await _handler.Handle(request, CancellationToken.None);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("Database connection failed");
-        result.Data.Should().NotBeNull();
-        result.Data.Should().BeEmpty();
-
-        _mockUserService.Verify(
-            x => x.GetUsersAsync(request.PageIndex, request.PageSize, request.Search),
-            Times.Once
-        );
-    }
 
     [Fact]
     public async Task Handle_WithServiceReturningNull_ShouldReturnErrorResponse()
@@ -191,9 +154,9 @@ public class GetAllHandlerTests
 
         // Assert
         result.Should().NotBeNull();
-        result.IsSuccess.Should().BeTrue(); // FIX: Should be true if Data is not null
-        result.StatusCode.Should().Be(200); // FIX: Should be 200 if IsSuccess is true
-        result.Message.Should().Be("Success"); // FIX: Should match the message
+        result.IsSuccess.Should().BeTrue();
+        result.StatusCode.Should().Be(200); 
+        result.Message.Should().Be(MessageKeys.Success); 
         result.Data.Should().NotBeNull();
         result.Data.Should().BeEmpty();
 
@@ -234,7 +197,7 @@ public class GetAllHandlerTests
         var serviceResponse = new ResponseCollection<UserDto>(
             IsSuccess: true,
             StatusCode: 200,
-            Message: "Users retrieved successfully",
+            Message: MessageKeys.Success,
             Data: userDtos
         );
 

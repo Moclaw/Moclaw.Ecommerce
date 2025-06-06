@@ -3,7 +3,10 @@ using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.Interfaces;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Azure.Amqp.Framing;
 using Moq;
+using Shared.Utils;
 
 namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.Register
 {
@@ -33,26 +36,20 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.Register
                 LastName = "User"
             };
 
-            var authResponse = new AuthResponse
+            var authResponse = new AuthResponseDto
             {
                 UserId = userId,
                 Email = "test@example.com",
                 AccessToken = "access-token",
                 RefreshToken = "refresh-token",
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
-                Roles = new List<string> { "User" }
+                Roles = ["User"]
             };
 
             _mockAuthService
-                .Setup(x => x.RegisterAsync(It.IsAny<RegisterDto>()))
-                .ReturnsAsync(
-                    new ServiceResult<AuthResponse>
-                    {
-                        IsSuccess = true,
-                        StatusCode = 200,
-                        Data = authResponse
-                    }
-                );
+            .Setup(x => x.RegisterAsync(It.IsAny<RegisterDto>()))
+            .ReturnsAsync(
+                new Shared.Responses.Response<AuthResponseDto>(true, 200, MessageKeys.Success, authResponse));
 
             // Act
             var result = await _handler.Handle(request, CancellationToken.None);
@@ -116,12 +113,10 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.Register
             _mockAuthService
                 .Setup(x => x.RegisterAsync(It.IsAny<RegisterDto>()))
                 .ReturnsAsync(
-                    new ServiceResult<AuthResponse>
-                    {
-                        IsSuccess = false,
-                        StatusCode = 409,
-                        Message = "Email already in use"
-                    }
+                    ResponseUtils.Error<AuthResponseDto>(
+                        409,
+                        MessageKeys.EmailAlreadyExists
+                    )
                 );
 
             // Act
@@ -131,7 +126,7 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.Register
             result.Should().NotBeNull();
             result.IsSuccess.Should().BeFalse();
             result.StatusCode.Should().Be(409);
-            result.Message.Should().Be("Email already in use");
+            result.Message.Should().Be(MessageKeys.EmailAlreadyExists);
             result.Data.Should().BeNull();
         }
     }

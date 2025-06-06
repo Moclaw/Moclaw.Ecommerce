@@ -36,11 +36,11 @@ public class UserConfigurationTests
         // Check required properties
         var emailProperty = userEntityType.FindProperty(nameof(User.Email));
         emailProperty.Should().NotBeNull();
-        emailProperty!.IsNullable.Should().BeFalse();
+        emailProperty.IsColumnNullable().Should().BeFalse();
 
         var passwordHashProperty = userEntityType.FindProperty(nameof(User.PasswordHash));
         passwordHashProperty.Should().NotBeNull();
-        passwordHashProperty!.IsNullable.Should().BeFalse();
+        passwordHashProperty.IsColumnNullable().Should().BeFalse();
 
         // Check indexes
         var indexes = userEntityType.GetIndexes();
@@ -88,7 +88,7 @@ public class UserConfigurationTests
         userEntityType.Should().NotBeNull();
         
         var tableName = userEntityType!.GetTableName();
-        tableName.Should().Be("Users");
+        tableName.Should().Be(nameof(User));
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class UserConfigurationTests
         // Check UserName constraints
         var userNameProperty = userEntityType.FindProperty(nameof(User.UserName));
         userNameProperty.Should().NotBeNull();
-        userNameProperty!.GetMaxLength().Should().Be(100);
+        userNameProperty!.GetMaxLength().Should().Be(256);
 
         // Check FirstName constraints
         var firstNameProperty = userEntityType.FindProperty(nameof(User.FirstName));

@@ -1,8 +1,10 @@
 using Ecom.Users.Application.Features.Users.Queries.GetById;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs.Users;
 using Ecom.Users.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
+using Pulsar.Client.Common;
 using Shared.Responses;
 using Shared.Utils;
 
@@ -38,11 +40,20 @@ public class GetByIdHandlerTests
             PhoneNumberConfirmed = false,
             TwoFactorEnabled = false,
             CreatedAt = DateTimeOffset.UtcNow.AddDays(-10),
-            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            UpdatedAt = DateTimeOffset.UtcNow.AddDays(-1).DateTime,
             Provider = "Local"
         };
 
+        var roles = new List<RoleDto>
+        {
+            new() { Name = "Admin" },
+            new() { Name = "User" }
+        };
+
         var serviceResponse = ResponseUtils.Success(userDto);
+
+        _mockUserService.Setup(x => x.GetUserRolesAsync(userId))
+            .ReturnsAsync(ResponseUtils.Success<IEnumerable<RoleDto>>(roles));
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(userId)).ReturnsAsync(serviceResponse);
 
@@ -53,7 +64,7 @@ public class GetByIdHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
         result.Data.Should().NotBeNull();
-        result.Data!.Id.Should().Be(userId);
+        result.Data.Id.Should().Be(userId);
         result.Data.Email.Should().Be(userDto.Email);
         result.Data.FirstName.Should().Be(userDto.FirstName);
         result.Data.LastName.Should().Be(userDto.LastName);
@@ -69,7 +80,7 @@ public class GetByIdHandlerTests
         var userId = Guid.NewGuid();
         var request = new GetByIdRequest { Id = userId };
 
-        var serviceResponse = ResponseUtils.Error<UserDto>(404, "User not found");
+        var serviceResponse = ResponseUtils.Error<UserDto>(404, MessageKeys.UserNotFound);
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(userId)).ReturnsAsync(serviceResponse);
 
@@ -79,8 +90,8 @@ public class GetByIdHandlerTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(404);
-        result.Message.Should().Be("User not found");
+        result.StatusCode.Should().Be(400);
+        result.Message.Should().Be(MessageKeys.UserNotFound);
         result.Data.Should().BeNull();
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
@@ -93,7 +104,7 @@ public class GetByIdHandlerTests
         var emptyGuid = Guid.Empty;
         var request = new GetByIdRequest { Id = emptyGuid };
 
-        var serviceResponse = ResponseUtils.Error<UserDto>(400, "Invalid user ID");
+        var serviceResponse = ResponseUtils.Error<UserDto>(400, MessageKeys.InvalidUserId);
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(emptyGuid)).ReturnsAsync(serviceResponse);
 
@@ -104,7 +115,7 @@ public class GetByIdHandlerTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("Invalid user ID");
+        result.Message.Should().Be(MessageKeys.InvalidUserId);
         result.Data.Should().BeNull();
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(emptyGuid), Times.Once);
@@ -154,7 +165,15 @@ public class GetByIdHandlerTests
         var userId = Guid.NewGuid();
         var request = new GetByIdRequest { Id = userId };
 
-        var serviceResponse = new Response<UserDto>(IsSuccess: true, 200, "Success", Data: null);
+        var serviceResponse = new Response<UserDto>(IsSuccess: true, 200, MessageKeys.Success, Data: null);
+
+        var mockedRoles = new List<RoleDto>
+        {
+            new() { Name = "User" }
+        };
+
+        _mockUserService.Setup(x => x.GetUserRolesAsync(userId))
+            .ReturnsAsync(ResponseUtils.Success<IEnumerable<RoleDto>>(mockedRoles));
 
         _mockUserService.Setup(x => x.GetUserByIdAsync(userId)).ReturnsAsync(serviceResponse);
 
@@ -163,7 +182,7 @@ public class GetByIdHandlerTests
 
         // Assert
         result.Should().NotBeNull();
-        result.IsSuccess.Should().BeTrue();
+        result.IsSuccess.Should().BeFalse();
         result.Data.Should().BeNull();
 
         _mockUserService.Verify(x => x.GetUserByIdAsync(userId), Times.Once);
@@ -191,6 +210,9 @@ public class GetByIdHandlerTests
             UpdatedAt = null,
             Provider = ""
         };
+
+        _mockUserService.Setup(x => x.GetUserRolesAsync(userId))
+            .ReturnsAsync(ResponseUtils.Success<IEnumerable<RoleDto>>(new List<RoleDto>()));
 
         var serviceResponse = ResponseUtils.Success(userDto);
 

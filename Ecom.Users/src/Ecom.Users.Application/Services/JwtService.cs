@@ -19,7 +19,7 @@ public class JwtService(IOptions<JwtOptions> jwtOptions) : IJwtService
     public string GenerateAccessToken(User user, IEnumerable<string> permissions)
     {
         var jwtId = Guid.NewGuid().ToString();
-        
+
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
@@ -63,7 +63,7 @@ public class JwtService(IOptions<JwtOptions> jwtOptions) : IJwtService
         var randomNumber = new byte[64];
         using var rng = RandomNumberGenerator.Create();
         rng.GetBytes(randomNumber);
-        
+
         return new RefreshToken
         {
             Id = Guid.NewGuid(),
@@ -92,14 +92,22 @@ public class JwtService(IOptions<JwtOptions> jwtOptions) : IJwtService
         };
 
         var tokenHandler = new JwtSecurityTokenHandler();
-        
+
         try
         {
-            var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out var securityToken);
-            
-            if (securityToken is not JwtSecurityToken jwtSecurityToken ||
-                !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, 
-                    StringComparison.InvariantCultureIgnoreCase))
+            var principal = tokenHandler.ValidateToken(
+                token,
+                tokenValidationParameters,
+                out var securityToken
+            );
+
+            if (
+                securityToken is not JwtSecurityToken jwtSecurityToken
+                || !jwtSecurityToken.Header.Alg.Equals(
+                    SecurityAlgorithms.HmacSha256,
+                    StringComparison.InvariantCultureIgnoreCase
+                )
+            )
             {
                 return null;
             }
@@ -119,17 +127,21 @@ public class JwtService(IOptions<JwtOptions> jwtOptions) : IJwtService
 
         try
         {
-            tokenHandler.ValidateToken(token, new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(key),
-                ValidateIssuer = true,
-                ValidIssuer = _jwtOptions.Issuer,
-                ValidateAudience = true,
-                ValidAudience = _jwtOptions.Audience,
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.Zero
-            }, out _);
+            tokenHandler.ValidateToken(
+                token,
+                new TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(key),
+                    ValidateIssuer = true,
+                    ValidIssuer = _jwtOptions.Issuer,
+                    ValidateAudience = true,
+                    ValidAudience = _jwtOptions.Audience,
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                },
+                out _
+            );
 
             return true;
         }

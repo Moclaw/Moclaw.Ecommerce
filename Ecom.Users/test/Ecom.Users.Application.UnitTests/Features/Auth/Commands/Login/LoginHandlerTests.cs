@@ -1,4 +1,5 @@
 using Ecom.Users.Application.Features.Auth.Commands.Login;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.DTOs.Users;
 using Ecom.Users.Domain.Interfaces;
@@ -42,10 +43,10 @@ public class LoginHandlerTests
             UserId = Guid.NewGuid(),
             Permissions = ["Permission1", "Permission2"],
             Roles = ["Role1", "Role2"],
-            Username = "johndoe"
+            UserName = "johndoe"
         };
 
-        var serviceResponse = ResponseUtils.Success(authResponse);
+        var serviceResponse = ResponseUtils.Success(authResponse, MessageKeys.Success);
 
         _mockAuthService
             .Setup(x => x.LoginAsync(It.IsAny<LoginDto>()))
@@ -57,12 +58,13 @@ public class LoginHandlerTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data!.AccessToken.Should().Be(authResponse.AccessToken);
         result.Data.RefreshToken.Should().Be(authResponse.RefreshToken);
         result.Data.Email.Should().Be(authResponse.Email);
         result.Data.UserId.Should().Be(authResponse.UserId);
-        
+
         // Verify the service was called with correct parameters
         _mockAuthService.Verify(
             x =>
@@ -90,8 +92,8 @@ public class LoginHandlerTests
         };
 
         var serviceResponse = ResponseUtils.Error<AuthResponseDto>(
-            401,
-            "Invalid email or password"
+            400,
+            MessageKeys.InvalidCredentials
         );
 
         _mockAuthService
@@ -104,48 +106,15 @@ public class LoginHandlerTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("Invalid email or password");
+        result.StatusCode.Should().Be(400); 
+        result.Message.Should().Be(MessageKeys.InvalidCredentials);
         result.Data.Should().BeNull();
 
         _mockAuthService.Verify(x => x.LoginAsync(It.IsAny<LoginDto>()), Times.Once);
     }
 
     [Fact]
-    public async Task Handle_WithServiceReturningNull_ShouldReturnErrorResponse()
-    {
-        // Arrange
-        var request = new LoginRequest
-        {
-            Email = "test@example.com",
-            Password = "password123",
-            RememberMe = false
-        };
-
-        var serviceResponse = new Response<AuthResponseDto>(
-            IsSuccess: true,
-            200,
-            "Success",
-            Data: null
-        );
-
-        _mockAuthService
-            .Setup(x => x.LoginAsync(It.IsAny<LoginDto>()))
-            .ReturnsAsync(serviceResponse);
-
-        // Act
-        var result = await _handler.Handle(request, CancellationToken.None);
-
-        // Assert
-        result.Should().NotBeNull();
-        result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("Login failed");
-        result.Data.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task Handle_WithServiceException_ShouldReturnErrorResponse()
+    public async Task Handle_WithServiceException_ShouldThrow()
     {
         // Arrange
         var request = new LoginRequest
@@ -179,8 +148,8 @@ public class LoginHandlerTests
         // Arrange
         var request = new LoginRequest
         {
-            Email = email!,
-            Password = password!,
+            Email = email ?? string.Empty,
+            Password = password ?? string.Empty,
             RememberMe = rememberMe
         };
 

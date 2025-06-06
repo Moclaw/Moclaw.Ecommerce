@@ -28,10 +28,10 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
             string reason = "";
 
             // Admin check
-            if (roles.Contains("Admin"))
+            if (roles.Contains(AuthConstants.Roles.Admin))
             {
                 hasPermission = true;
-                reason = "Admin role";
+                reason = MessageKeys.AdminRole;
             }
             // Ownership check for user resource
             else if (request.Resource.Equals("user", StringComparison.OrdinalIgnoreCase))
@@ -39,12 +39,12 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
                 if (request.ResourceId.HasValue && request.ResourceId.Value == request.UserId)
                 {
                     hasPermission = true;
-                    reason = "Resource ownership";
+                    reason = MessageKeys.ResourceOwnership;
                 }
                 else if (!request.ResourceId.HasValue && request.Action.Equals("read", StringComparison.OrdinalIgnoreCase))
                 {
                     hasPermission = true;
-                    reason = "Self read access";
+                    reason = MessageKeys.SelfReadAccess;
                 }
                 else
                 {
@@ -53,7 +53,7 @@ namespace Ecom.Users.Application.Features.Permissions.Queries.ValidatePermission
             }
             else
             {
-                reason = "Resource not supported";
+                reason = MessageKeys.ResourceNotSupported;
             }
 
             var response = new ValidatePermissionResponse

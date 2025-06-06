@@ -4,7 +4,7 @@ public class User : BaseEntity, IEntity<Guid>
 {
     public Guid Id { get; set; }
     
-    public string Email { get; set; } = null!;
+    public string Email { get; set; }
     
     public string? UserName { get; set; }
     

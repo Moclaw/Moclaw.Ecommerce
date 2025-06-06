@@ -1,5 +1,6 @@
 ﻿using Domain.Builders;
 using Ecom.Users.Application.Services;
+using Ecom.Users.Domain.Constants;
 using Ecom.Users.Domain.DTOs;
 using Ecom.Users.Domain.DTOs.Users;
 using Ecom.Users.Domain.Entities;
@@ -62,8 +63,10 @@ public class AuthServiceTests
             Id = Guid.NewGuid(),
             Email = "test@example.com",
             PasswordHash = "hashedPassword",
+            UserName = "testuser",
             EmailConfirmed = true,
-            LockoutEnabled = false
+            LockoutEnabled = false,
+            Provider = AuthConstants.Providers.Local,
         };
 
         var refreshToken = "refreshTokenValue";
@@ -103,11 +106,12 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
-        result.Data!.AccessToken.Should().Be(accessToken);
+        result.Data.AccessToken.Should().Be(accessToken);
         result.Data.RefreshToken.Should().Be(refreshToken);
         result.Data.Email.Should().Be(user.Email);
-        result.Data.Username.Should().Be(user.UserName);
+        result.Data.UserName.Should().Be(user.UserName);
     }
 
     [Fact]
@@ -139,8 +143,8 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(401);
-        result.Message.Should().Be("Invalid email or password");
+        result.StatusCode.Should().Be(400);
+        result.Message.Should().Be(MessageKeys.InvalidCredentials);
         result.Data.Should().BeNull();
     }
 
@@ -161,7 +165,8 @@ public class AuthServiceTests
             Email = "test@example.com",
             PasswordHash = "hashedPassword",
             EmailConfirmed = true,
-            LockoutEnabled = false
+            LockoutEnabled = false,
+            Provider = AuthConstants.Providers.Local
         };
 
         _mockUserRepository
@@ -187,7 +192,7 @@ public class AuthServiceTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(401);
-        result.Message.Should().Be("Invalid email or password");
+        result.Message.Should().Be(MessageKeys.InvalidCredentials);
         result.Data.Should().BeNull();
     }
 
@@ -233,10 +238,10 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(401);
+        result.StatusCode.Should().Be(400);
         result.Message
             .Should()
-            .Be("Email not confirmed. Please check your email for confirmation instructions.");
+            .Be(MessageKeys.EmailNotConfirmed);
         result.Data.Should().BeNull();
     }
 
@@ -250,7 +255,9 @@ public class AuthServiceTests
             Password = "validPassword123",
             FirstName = "John",
             LastName = "Doe",
-            UserName = "johndoe"
+            UserName = "johndoe",
+            ConfirmPassword = "validPassword123",
+            PhoneNumber = "1234567890"
         };
 
         var hashedPassword = "hashedPassword123";
@@ -270,8 +277,48 @@ public class AuthServiceTests
             .Returns(hashedPassword);
 
         _mockCommandRepository
-            .Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .Setup(x => x.SaveChangesAsync(false, It.IsAny<CancellationToken>())) // Updated setup
             .ReturnsAsync(1);
+
+        _mockRoleRepository
+            .Setup(
+                x =>
+                    x.FirstOrDefaultAsync(
+                        It.IsAny<Expression<Func<Role, bool>>>(),
+                        It.IsAny<Action<IFluentBuilder<Role>>>(),
+                        false,
+                        default
+                    )
+            )
+            .ReturnsAsync(new Role
+            {
+                Id = Guid.NewGuid(),
+                Name = "User",
+                NormalizedName = "USER"
+            });
+
+        var accessToken = "accessToken";
+        var refreshToken = "refreshTokenValue";
+
+        _mockJwtService
+            .Setup(x => x.GenerateAccessToken(It.IsAny<User>(), It.IsAny<IEnumerable<string>>()))
+            .Returns(accessToken);
+
+        _mockJwtService
+            .Setup(x => x.GenerateRefreshToken(It.IsAny<User>(), It.IsAny<string>()))
+            .Returns(new RefreshToken { Token = refreshToken });
+
+        _mockCommandRepository
+            .Setup(x => x.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RefreshToken()
+            {
+                Token = refreshToken,
+                UserId = It.IsAny<Guid>(),
+                ExpiryDate = DateTimeOffset.UtcNow.AddDays(30),
+                IsRevoked = false,
+                IsUsed = false
+            });
+
 
         // Act
         var result = await _authService.RegisterAsync(registerDto);
@@ -279,17 +326,18 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data!.Email.Should().Be(registerDto.Email);
-        result.Data.Username.Should().Be(registerDto.UserName);
+        result.Data.UserName.Should().Be(registerDto.UserName);
 
         _mockCommandRepository.Verify(
             x => x.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
             Times.Once
         );
         _mockCommandRepository.Verify(
-            x => x.SaveChangesAsync(It.IsAny<CancellationToken>()),
-            Times.Once
+            x => x.SaveChangesAsync(false, It.IsAny<CancellationToken>()), // Updated verification
+            Times.Exactly(2)
         );
     }
 
@@ -306,15 +354,39 @@ public class AuthServiceTests
             UserName = "johndoe"
         };
 
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = registerDto.Email,
+            PasswordHash = "hashedPassword123",
+            UserName = registerDto.UserName,
+            EmailConfirmed = true,
+            LockoutEnabled = false
+        };
+
         _mockUserRepository
             .Setup(
                 x =>
-                    x.AnyAsync(
+                    x.FirstOrDefaultAsync(
                         It.IsAny<Expression<Func<User, bool>>>(),
-                        It.IsAny<CancellationToken>()
+                        It.IsAny<Action<IFluentBuilder<User>>>(),
+                        false,
+                        default
                     )
             )
-            .ReturnsAsync(true);
+            .ReturnsAsync(user);
+
+        _mockRoleRepository
+            .Setup(
+                x =>
+                    x.FirstOrDefaultAsync(
+                        It.IsAny<Expression<Func<Role, bool>>>(),
+                        It.IsAny<Action<IFluentBuilder<Role>>>(),
+                        false,
+                        default
+                    )
+            )
+            .ReturnsAsync((Role?)null);
 
         // Act
         var result = await _authService.RegisterAsync(registerDto);
@@ -322,8 +394,8 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
-        result.StatusCode.Should().Be(400);
-        result.Message.Should().Be("User with this email already exists");
+        result.StatusCode.Should().Be(409);
+        result.Message.Should().Be(MessageKeys.EmailAlreadyExists);
         result.Data.Should().BeNull();
 
         _mockCommandRepository.Verify(
@@ -350,7 +422,8 @@ public class AuthServiceTests
         {
             Id = userId,
             Email = "test@example.com",
-            EmailConfirmed = true
+            EmailConfirmed = true,
+            UserName = "testuser",
         };
 
         var storedRefreshToken = new RefreshToken
@@ -363,6 +436,17 @@ public class AuthServiceTests
             IsUsed = false,
             User = user
         };
+
+        _mockUserRepository.Setup(
+            x =>
+                x.FirstOrDefaultAsync(
+                    It.IsAny<Expression<Func<User, bool>>>(),
+                    It.IsAny<Action<IFluentBuilder<User>>>(),
+                    false,
+                    default
+                )
+        )
+            .ReturnsAsync(user);
 
         _mockRefreshTokenRepository
             .Setup(
@@ -394,11 +478,12 @@ public class AuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue();
+        result.Message.Should().Be(MessageKeys.Success);
         result.Data.Should().NotBeNull();
         result.Data!.AccessToken.Should().Be(newAccessToken);
         result.Data.RefreshToken.Should().Be(newRefreshToken);
         result.Data.Email.Should().Be(user.Email);
-        result.Data.Username.Should().Be(user.UserName);
+        result.Data.UserName.Should().Be(user.UserName);
 
         storedRefreshToken.IsUsed.Should().BeTrue();
     }
@@ -429,7 +514,7 @@ public class AuthServiceTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(401);
-        result.Message.Should().Be("Invalid refresh token");
+        result.Message.Should().Be(MessageKeys.InvalidToken);
         result.Data.Should().BeNull();
     }
 
@@ -478,7 +563,7 @@ public class AuthServiceTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeFalse();
         result.StatusCode.Should().Be(401);
-        result.Message.Should().Be("Refresh token has expired");
+        result.Message.Should().Be(MessageKeys.TokenExpired);
         result.Data.Should().BeNull();
     }
 }

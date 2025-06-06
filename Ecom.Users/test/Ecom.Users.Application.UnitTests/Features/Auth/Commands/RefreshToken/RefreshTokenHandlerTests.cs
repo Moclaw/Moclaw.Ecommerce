@@ -80,7 +80,7 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.RefreshToken
             result.Should().NotBeNull();
             result.IsSuccess.Should().BeFalse();
             result.StatusCode.Should().Be(401);
-            result.Message.Should().Be("Invalid refresh token");
+            result.Message.Should().Be(MessageKeys.Unauthorized);
             result.Data.Should().BeNull();
         }
     }

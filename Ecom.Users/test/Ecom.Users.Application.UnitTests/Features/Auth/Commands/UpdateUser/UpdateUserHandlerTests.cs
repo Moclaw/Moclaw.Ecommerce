@@ -39,7 +39,12 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.UpdateUser
                 It.IsAny<Guid>(),
                 It.IsAny<UpdateUserDto>(),
                 It.IsAny<bool>()
-            )).ReturnsAsync(new Domain.Models.ServiceResult { IsSuccess = true });
+            )).ReturnsAsync( new Shared.Responses.Response<bool>(
+                true,
+                200,
+                MessageKeys.Success,
+                true
+            ));
 
             // Act
             var result = await _handler.Handle(request, CancellationToken.None);
@@ -51,7 +56,7 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.UpdateUser
             result.Data.Should().NotBeNull();
             result.Data!.UserId.Should().Be(userId);
             result.Data.IsSuccess.Should().BeTrue();
-            result.Message.Should().Be(MessageKeys.UserUpdatedSuccessfully);
+            result.Message.Should().Be(MessageKeys.Success);
         }
 
         [Fact]
@@ -66,18 +71,18 @@ namespace Ecom.Users.Application.UnitTests.Features.Auth.Commands.UpdateUser
                 Email = "test@example.com"
             };
 
-            var errorMessage = "Update failed test message";
+            var errorMessage = MessageKeys.Error;
             _mockAuthService.Setup(x => x.UpdateUserAsync(
                 It.IsAny<Guid>(),
                 It.IsAny<Guid>(),
                 It.IsAny<UpdateUserDto>(),
                 It.IsAny<bool>()
-            )).ReturnsAsync(new Domain.Models.ServiceResult
-            {
-                IsSuccess = false,
-                StatusCode = 400,
-                Message = errorMessage
-            });
+            )).ReturnsAsync( new Shared.Responses.Response<bool>(
+                false,
+                400,
+                errorMessage,
+                false
+            ));
 
             // Act
             var result = await _handler.Handle(request, CancellationToken.None);
