@@ -1,4 +1,9 @@
 services:
+  ecom.aspire:
+    image: ${DOCKER_REGISTRY-}ecomaspire
+    build:
+      context: .
+      dockerfile: AspireHost/AspireHost/Dockerfile
   ecom.users.api:
     image: ${DOCKER_REGISTRY-}ecomusersapi
     build:
