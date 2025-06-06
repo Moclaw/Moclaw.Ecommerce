@@ -366,3 +366,4 @@ FodyWeavers.xsd
 .idea/.idea.Moclaw.Ecommerce/.idea/indexLayout.xml
 .idea/.idea.Moclaw.Ecommerce/.idea/vcs.xml
 *.xml
+appsettings.Development.json
