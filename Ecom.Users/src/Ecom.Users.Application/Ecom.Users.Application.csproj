@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ecom.Users.Domain\Ecom.Users.Domain.csproj" />
+    <ProjectReference Include="..\Ecom.Users.Infrastructure\Ecom.Users.Infrastructure.csproj" />
+    <ProjectReference Include="..\Ecom.Users.Shared\Ecom.Users.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MediatR" Version="12.5.0" />
+    <PackageReference Include="Moclawr.Core" Version="2.1.0" />
+    <PackageReference Include="Moclawr.Services.Autofac" Version="2.1.1" />
+    <PackageReference Include="Moclawr.Services.Caching" Version="2.1.0" />
+    <PackageReference Include="Moclawr.Shared" Version="2.0.1" />
+    <PackageReference Include="Moclawr.MinimalAPI" Version="2.1.9" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
