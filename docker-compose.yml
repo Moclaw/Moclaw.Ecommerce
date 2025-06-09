@@ -5,7 +5,7 @@ services:
     container_name: ecom-users-api
     build:
       context: .
-      dockerfile: Ecom.Users.API/Dockerfile
+      dockerfile: Ecom.Users/Ecom.Users.API/Dockerfile
     ports:
       - "5001:5001"
     environment:
@@ -16,7 +16,7 @@ services:
     container_name: ecom-core-api
     build:
       context: .
-      dockerfile: Ecom.Core.API/Dockerfile
+      dockerfile: Ecom.Core/Ecom.Core.API/Dockerfile
     ports:
       - "5002:5002"
     environment:
