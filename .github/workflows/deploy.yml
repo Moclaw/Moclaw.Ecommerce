@@ -1,16 +1,189 @@
-name: Docker Image CI
+name: Ecommerce CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_REGISTRY: localhost:5000
+  KUBECTL_VERSION: v1.28.0
 
 jobs:
-
-  build:
-
+  build-and-deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Cache .NET dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Start Minikube
+      uses: medyagh/setup-minikube@master
+      with:
+        minikube-version: 1.32.0
+        kubernetes-version: v1.28.0
+        driver: docker
+        addons: |
+          registry
+          ingress
+
+    - name: Add Worker Node
+      run: |
+        minikube node add
+
+    - name: Label Minikube Nodes
+      run: |
+        # Wait for nodes to be ready
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+        
+        # Get node names
+        NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
+        
+        # Label first node for core service
+        kubectl label nodes ${NODES[0]} service=core --overwrite
+        echo "Labeled ${NODES[0]} for core service"
+        
+        # Label second node for users service (if exists, otherwise use same node)
+        if [ ${#NODES[@]} -gt 1 ]; then
+          kubectl label nodes ${NODES[1]} service=users --overwrite
+          echo "Labeled ${NODES[1]} for users service"
+        else
+          kubectl label nodes ${NODES[0]} service=users --overwrite
+          echo "Labeled ${NODES[0]} for users service (single node setup)"
+        fi
+        
+        # Display node labels
+        kubectl get nodes --show-labels
+
+    - name: Run Tests
+      run: |
+        # Test Core service
+        dotnet test Ecom.Core/test/EcomCore.Application.UnitTests/EcomCore.Application.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+        dotnet test Ecom.Core/test/EcomCore.Domain.UnitTests/EcomCore.Domain.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+        dotnet test Ecom.Core/test/EcomCore.Infrastructure.UnitTests/EcomCore.Infrastructure.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+        
+        # Test Users service
+        dotnet test Ecom.Users/test/Ecom.Users.Application.UnitTests/Ecom.Users.Application.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+        dotnet test Ecom.Users/test/Ecom.Users.Domain.UnitTests/Ecom.Users.Domain.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+        dotnet test Ecom.Users/test/Ecom.Users.Infrastructure.UnitTests/Ecom.Users.Infrastructure.UnitTests.csproj --configuration Release --logger trx --collect:"XPlat Code Coverage"
+
+    - name: Build Docker Images
+      run: |
+        # Configure Docker to use Minikube's Docker daemon
+        eval $(minikube docker-env)
+        
+        # Build Core API image
+        echo "Building Core API image..."
+        docker build -t ecom-core-api:latest -f Ecom.Core/src/Ecom.Core.API/Dockerfile .
+        
+        # Build Users API image
+        echo "Building Users API image..."
+        docker build -t ecom-users-api:latest -f Ecom.Users/src/Ecom.Users.API/Dockerfile .
+        
+        # List built images
+        docker images | grep ecom
+
+    - name: Create Kubernetes Namespace
+      run: |
+        kubectl apply -f k8s/namespace.yml
+
+    - name: Deploy Core Service
+      run: |
+        kubectl apply -f k8s/core-service/
+        
+        # Wait for Core deployment to be ready
+        kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce
+
+    - name: Deploy Users Service
+      run: |
+        kubectl apply -f k8s/users-service/
+        
+        # Wait for Users deployment to be ready
+        kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce
+
+    - name: Verify Deployments
+      run: |
+        echo "=== Checking deployments ==="
+        kubectl get deployments -n ecommerce
+        
+        echo "=== Checking pods ==="
+        kubectl get pods -n ecommerce -o wide
+        
+        echo "=== Checking services ==="
+        kubectl get services -n ecommerce
+        
+        echo "=== Checking ingress ==="
+        kubectl get ingress -n ecommerce
+        
+        echo "=== Node assignments ==="
+        kubectl get pods -n ecommerce -o wide --show-labels
+
+    - name: Health Check
+      run: |
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -l app=ecom-core-api -n ecommerce --timeout=300s
+        kubectl wait --for=condition=ready pod -l app=ecom-users-api -n ecommerce --timeout=300s
+        
+        # Get Minikube IP for testing
+        MINIKUBE_IP=$(minikube ip)
+        echo "Minikube IP: $MINIKUBE_IP"
+        
+        # Test Core service
+        echo "Testing Core service..."
+        kubectl port-forward -n ecommerce service/ecom-core-service 8080:80 &
+        CORE_PF_PID=$!
+        sleep 10
+        
+        # Simple health check for Core
+        curl -f http://localhost:8080/health || echo "Core service health check failed"
+        kill $CORE_PF_PID
+        
+        # Test Users service
+        echo "Testing Users service..."
+        kubectl port-forward -n ecommerce service/ecom-users-service 8081:80 &
+        USERS_PF_PID=$!
+        sleep 10
+        
+        # Simple health check for Users
+        curl -f http://localhost:8081/health || echo "Users service health check failed"
+        kill $USERS_PF_PID
+
+    - name: Generate Deployment Summary
+      if: always()
+      run: |
+        echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "### Services Deployed:" >> $GITHUB_STEP_SUMMARY
+        echo "- Core Service: ecom-core-api" >> $GITHUB_STEP_SUMMARY
+        echo "- Users Service: ecom-users-api" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Node Distribution:" >> $GITHUB_STEP_SUMMARY
+        kubectl get pods -n ecommerce -o wide --no-headers | awk '{print "- " $1 " -> " $7}' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Access URLs:" >> $GITHUB_STEP_SUMMARY
+        echo "- Core API: http://core.ecommerce.local" >> $GITHUB_STEP_SUMMARY
+        echo "- Users API: http://users.ecommerce.local" >> $GITHUB_STEP_SUMMARY
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+    if: always()
+    
+    steps:
+    - name: Cleanup Minikube
+      if: github.event_name == 'pull_request'
+      run: |
+        minikube delete || true
