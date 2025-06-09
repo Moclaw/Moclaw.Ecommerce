@@ -53,18 +53,59 @@ jobs:
           minikube image load moclaw/ecom-core-api:latest
           minikube image load moclaw/ecom-users-api:latest
           
+      - name: Validate Kubernetes manifests
+        run: |
+          echo "Validating Kubernetes manifests..."
+          
+          # Check if files exist
+          ls -la k8s/
+          ls -la k8s/monitoring/
+          
+          # Validate YAML syntax
+          echo "Validating namespace.yaml..."
+          kubectl apply --dry-run=client -f k8s/namespace.yaml
+          
+          echo "Validating core-deployment.yaml..."
+          kubectl apply --dry-run=client -f k8s/core-deployment.yaml
+          
+          echo "Validating users-deployment.yaml..."
+          kubectl apply --dry-run=client -f k8s/users-deployment.yaml
+          
+          echo "Validating configmap.yaml..."
+          kubectl apply --dry-run=client -f k8s/configmap.yaml
+          
+          echo "Validating prometheus-config.yaml..."
+          kubectl apply --dry-run=client -f k8s/monitoring/prometheus-config.yaml
+          
+          echo "Validating prometheus-deployment.yaml..."
+          kubectl apply --dry-run=client -f k8s/monitoring/prometheus-deployment.yaml
+
       - name: Deploy to Minikube
         run: |
+          echo "Creating namespace..."
           kubectl apply -f k8s/namespace.yaml
+          
+          echo "Waiting for namespace to be ready..."
+          kubectl wait --for=condition=Active --timeout=60s namespace/ecommerce
+          
+          echo "Deploying applications..."
           kubectl apply -f k8s/core-deployment.yaml
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/configmap.yaml
 
       - name: Deploy monitoring resources
         run: |
+          echo "Deploying Prometheus configuration..."
+          kubectl get namespace ecommerce || echo "Namespace not found"
+          
+          # Verify the config file exists and is valid
+          echo "Checking prometheus config file..."
+          cat k8s/monitoring/prometheus-config.yaml | head -10
+          
           # Deploy Prometheus configuration
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
           
+          echo "Deploying Prometheus and Grafana..."
           # Deploy Prometheus server directly (without Operator)
           kubectl apply -f k8s/monitoring/prometheus-deployment.yaml
           
