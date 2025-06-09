@@ -1,18 +1,30 @@
+version: '3.8'
+
 services:
   ecom.aspire:
-    image: ${DOCKER_REGISTRY-}ecomaspire
     build:
       context: .
-      dockerfile: AspireHost/AspireHost/Dockerfile
+      dockerfile: Moclaw.Ecommerce.AppHost/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+
   ecom.users.api:
-    image: ${DOCKER_REGISTRY-}ecomusersapi
     build:
       context: .
-      dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
+      dockerfile: Moclaw.Ecommerce.Users/Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
 
   ecomcore.api:
-    image: ${DOCKER_REGISTRY-}ecomcoreapi
     build:
       context: .
-      dockerfile: EcomCore/src/EcomCore.API/Dockerfile
+      dockerfile: Moclaw.Ecommerce.Core/Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
 
