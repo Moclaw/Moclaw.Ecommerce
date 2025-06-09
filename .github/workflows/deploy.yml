@@ -86,32 +86,52 @@ jobs:
         # Get Minikube IP for registry access
         MINIKUBE_IP=$(minikube ip)
         REGISTRY_PORT=5000
+        REGISTRY_URL="$MINIKUBE_IP:$REGISTRY_PORT"
+        
+        # Configure Docker to allow insecure registry
+        echo "Configuring Docker for insecure registry..."
+        sudo mkdir -p /etc/docker
+        echo '{
+          "insecure-registries": ["'$REGISTRY_URL'"]
+        }' | sudo tee /etc/docker/daemon.json
+        sudo systemctl restart docker
+        
+        # Wait for Docker to restart
+        sleep 10
         
         # Build Core API image
         echo "Building Core API image..."
         docker build -t ecom-core-api:latest -f Ecom.Core/src/Ecom.Core.API/Dockerfile .
-        docker tag ecom-core-api:latest $MINIKUBE_IP:$REGISTRY_PORT/ecom-core-api:latest
+        docker tag ecom-core-api:latest $REGISTRY_URL/ecom-core-api:latest
         
         # Build Users API image
         echo "Building Users API image..."
         docker build -t ecom-users-api:latest -f Ecom.Users/src/Ecom.Users.API/Dockerfile .
-        docker tag ecom-users-api:latest $MINIKUBE_IP:$REGISTRY_PORT/ecom-users-api:latest
+        docker tag ecom-users-api:latest $REGISTRY_URL/ecom-users-api:latest
         
         # Push images to Minikube registry
         echo "Pushing images to Minikube registry..."
-        docker push $MINIKUBE_IP:$REGISTRY_PORT/ecom-core-api:latest
-        docker push $MINIKUBE_IP:$REGISTRY_PORT/ecom-users-api:latest
+        docker push $REGISTRY_URL/ecom-core-api:latest
+        docker push $REGISTRY_URL/ecom-users-api:latest
+        
+        # Update deployment files with registry URL
+        sed -i "s|image: ecom-core-api:latest|image: $REGISTRY_URL/ecom-core-api:latest|g" k8s/core-service/deployment.yml
+        sed -i "s|imagePullPolicy: Never|imagePullPolicy: Always|g" k8s/core-service/deployment.yml
+        
+        sed -i "s|image: ecom-users-api:latest|image: $REGISTRY_URL/ecom-users-api:latest|g" k8s/users-service/deployment.yml
+        sed -i "s|imagePullPolicy: Never|imagePullPolicy: Always|g" k8s/users-service/deployment.yml
         
         # List built images
         docker images | grep ecom
         
         # Verify images in registry
         echo "Images in registry:"
-        curl -s http://$MINIKUBE_IP:$REGISTRY_PORT/v2/_catalog
+        curl -s http://$REGISTRY_URL/v2/_catalog
 
     - name: Create Kubernetes Namespace
       run: |
         kubectl apply -f k8s/namespace.yml
+        kubectl apply -f k8s/storage-secrets.yml
 
     - name: Deploy Core Service
       run: |
