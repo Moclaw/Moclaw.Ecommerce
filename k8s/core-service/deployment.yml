@@ -21,8 +21,8 @@ spec:
         service: core
       containers:
       - name: ecom-core-api
-        image: ecom-core-api:latest
-        imagePullPolicy: Never
+        image: localhost:5000/ecom-core-api:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
           name: http
@@ -38,11 +38,13 @@ spec:
             secretKeyRef:
               name: ecom-secrets
               key: database-connection
+              optional: true
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:
               name: ecom-secrets
               key: jwt-secret
+              optional: true
         volumeMounts:
         - name: shared-storage
           mountPath: /app/shared
@@ -59,12 +61,14 @@ spec:
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /health/ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
+          failureThreshold: 3
       volumes:
       - name: shared-storage
         persistentVolumeClaim:
