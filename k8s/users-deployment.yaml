@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecom-users-api
+  namespace: ecommerce
+  labels:
+    app: ecom-users-api
+    service: users
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ecom-users-api
+  template:
+    metadata:
+      labels:
+        app: ecom-users-api
+        service: users
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+      - name: ecom-users-api
+        image: moclaw/ecom-users-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ecom-users-service
+  namespace: ecommerce
+  labels:
+    app: ecom-users-api
+spec:
+  selector:
+    app: ecom-users-api
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  type: ClusterIP
