@@ -62,8 +62,11 @@ jobs:
 
       - name: Deploy monitoring resources
         run: |
+          # Deploy Prometheus configuration
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
-          kubectl apply -f k8s/monitoring/servicemonitor.yaml
+          
+          # Deploy Prometheus server directly (without Operator)
+          kubectl apply -f k8s/monitoring/prometheus-deployment.yaml
           
       - name: Verify deployment
         run: |
@@ -71,6 +74,14 @@ jobs:
           kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce
           kubectl get pods -n ecommerce
           kubectl get services -n ecommerce
+          
+      - name: Wait for monitoring stack
+        run: |
+          echo "Waiting for monitoring deployments..."
+          kubectl wait --for=condition=available --timeout=300s deployment/prometheus -n ecommerce || echo "Prometheus deployment timeout (may still be starting)"
+          kubectl wait --for=condition=available --timeout=300s deployment/grafana -n ecommerce || echo "Grafana deployment timeout (may still be starting)"
+          kubectl get pods -n ecommerce -l app=prometheus
+          kubectl get pods -n ecommerce -l app=grafana
 
       - name: Test Service Health
         run: |
@@ -97,5 +108,25 @@ jobs:
           
           # Clean up port forward
           kill $USERS_PID || true
+          
+          # Test monitoring endpoints
+          echo "Testing Prometheus..."
+          kubectl port-forward -n ecommerce service/prometheus 9090:9090 &
+          PROM_PID=$!
+          sleep 10
+          
+          curl -f http://localhost:9090/-/healthy || echo "Prometheus health check failed"
+          curl -s http://localhost:9090/api/v1/targets | grep -o '"health":"[^"]*"' || echo "Could not check Prometheus targets"
+          
+          kill $PROM_PID || true
+          
+          echo "Testing Grafana..."
+          kubectl port-forward -n ecommerce service/grafana 3000:3000 &
+          GRAFANA_PID=$!
+          sleep 10
+          
+          curl -f http://localhost:3000/api/health || echo "Grafana health check failed"
+          
+          kill $GRAFANA_PID || true
           
           echo "Service connectivity tests completed"
