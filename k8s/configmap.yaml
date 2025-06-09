@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecommerce-config
+  namespace: ecommerce
+data:
+  appsettings.json: |
+    {
+      "Logging": {
+        "LogLevel": {
+          "Default": "Information",
+          "Microsoft": "Warning",
+          "Microsoft.Hosting.Lifetime": "Information"
+        }
+      },
+      "AllowedHosts": "*",
+      "ConnectionStrings": {
+        "DefaultConnection": "YOUR_CONNECTION_STRING_HERE"
+      }
+    }
