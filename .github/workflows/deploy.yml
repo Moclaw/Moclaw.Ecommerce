@@ -83,19 +83,31 @@ jobs:
 
     - name: Build Docker Images
       run: |
-        # Configure Docker to use Minikube's Docker daemon
-        eval $(minikube docker-env)
+        # Get Minikube IP for registry access
+        MINIKUBE_IP=$(minikube ip)
+        REGISTRY_PORT=5000
         
         # Build Core API image
         echo "Building Core API image..."
         docker build -t ecom-core-api:latest -f Ecom.Core/src/Ecom.Core.API/Dockerfile .
+        docker tag ecom-core-api:latest $MINIKUBE_IP:$REGISTRY_PORT/ecom-core-api:latest
         
         # Build Users API image
         echo "Building Users API image..."
         docker build -t ecom-users-api:latest -f Ecom.Users/src/Ecom.Users.API/Dockerfile .
+        docker tag ecom-users-api:latest $MINIKUBE_IP:$REGISTRY_PORT/ecom-users-api:latest
+        
+        # Push images to Minikube registry
+        echo "Pushing images to Minikube registry..."
+        docker push $MINIKUBE_IP:$REGISTRY_PORT/ecom-core-api:latest
+        docker push $MINIKUBE_IP:$REGISTRY_PORT/ecom-users-api:latest
         
         # List built images
         docker images | grep ecom
+        
+        # Verify images in registry
+        echo "Images in registry:"
+        curl -s http://$MINIKUBE_IP:$REGISTRY_PORT/v2/_catalog
 
     - name: Create Kubernetes Namespace
       run: |
