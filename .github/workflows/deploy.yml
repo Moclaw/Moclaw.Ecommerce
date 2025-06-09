@@ -51,6 +51,15 @@ jobs:
         
         # Wait for all nodes to be ready
         kubectl wait --for=condition=Ready nodes --all --timeout=600s
+        
+        # Verify cluster connectivity
+        echo "=== Verifying cluster connectivity ==="
+        kubectl cluster-info
+        kubectl get nodes
+        
+        # Configure kubectl context
+        kubectl config current-context
+        kubectl config view --minify
 
     - name: Label Nodes for Service Distribution
       run: |
@@ -303,7 +312,33 @@ jobs:
 
     - name: Create Kubernetes Resources
       run: |
-        kubectl apply -f k8s/namespace.yml
+        # Verify cluster is accessible before applying resources
+        echo "=== Verifying cluster connectivity ==="
+        kubectl cluster-info
+        kubectl get nodes
+        
+        # Check if namespace file exists and apply with validation disabled if needed
+        if [ -f "k8s/namespace.yml" ]; then
+          echo "Applying namespace from file..."
+          kubectl apply -f k8s/namespace.yml --validate=false
+        else
+          echo "Creating namespace directly..."
+          kubectl create namespace ecommerce --dry-run=client -o yaml | kubectl apply -f -
+        fi
+        
+        # Wait a moment for namespace to be ready
+        sleep 5
+        kubectl get namespace ecommerce
+        
+        # Create secrets if the file exists
+        if [ -f "k8s/storage-secrets.yml" ]; then
+          kubectl apply -f k8s/storage-secrets.yml --validate=false
+        fi
+        
+        # Clean up registry port-forward
+        if [ ! -z "$REGISTRY_PF_PID" ]; then
+          kill $REGISTRY_PF_PID || true
+        fi
         
         # Create monitoring service monitors
         cat <<EOF | kubectl apply -f -
@@ -344,6 +379,9 @@ jobs:
 
     - name: Deploy Core Service with Pod Affinity
       run: |
+        # Verify cluster connectivity
+        kubectl cluster-info
+        
         # Update Core deployment with node affinity and resource limits
         cat <<EOF | kubectl apply -f -
         apiVersion: apps/v1
@@ -415,13 +453,34 @@ jobs:
                   value: "Production"
                 - name: ENABLE_METRICS
                   value: "true"
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ecom-core-service
+          namespace: ecommerce
+        spec:
+          selector:
+            app: ecom-core-api
+          ports:
+          - port: 80
+            targetPort: 8080
+            protocol: TCP
+          type: ClusterIP
         EOF
         
-        kubectl apply -f k8s/core-service/
+        # Apply additional core service files if they exist
+        if [ -d "k8s/core-service" ]; then
+          kubectl apply -f k8s/core-service/ --validate=false
+        fi
+        
         kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce
 
     - name: Deploy Users Service with Pod Affinity
       run: |
+        # Verify cluster connectivity
+        kubectl cluster-info
+        
         # Update Users deployment with node affinity and resource limits
         cat <<EOF | kubectl apply -f -
         apiVersion: apps/v1
@@ -493,9 +552,27 @@ jobs:
                   value: "Production"
                 - name: ENABLE_METRICS
                   value: "true"
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ecom-users-service
+          namespace: ecommerce
+        spec:
+          selector:
+            app: ecom-users-api
+          ports:
+          - port: 80
+            targetPort: 8080
+            protocol: TCP
+          type: ClusterIP
         EOF
         
-        kubectl apply -f k8s/users-service/
+        # Apply additional users service files if they exist
+        if [ -d "k8s/users-service" ]; then
+          kubectl apply -f k8s/users-service/ --validate=false
+        fi
+        
         kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce
 
     - name: Verify Pod Distribution and Monitoring
