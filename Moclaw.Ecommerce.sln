@@ -31,8 +31,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Users.Domain.UnitTests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Users.Infrastructure.UnitTests", "Ecom.Users\test\Ecom.Users.Infrastructure.UnitTests\Ecom.Users.Infrastructure.UnitTests.csproj", "{FF46FD4F-0AFF-D2EE-C230-1E692BB0DD0F}"
 EndProject
-Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{81DDED9D-158B-E303-5F62-77A2896D2A5A}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Core.Application", "Ecom.Core\src\Ecom.Core.Application\Ecom.Core.Application.csproj", "{DA822C59-5C2D-6272-F375-1893DA63F01C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Core.Infrastructure", "Ecom.Core\src\Ecom.Core.Infrastructure\Ecom.Core.Infrastructure.csproj", "{B1321A44-451F-D332-2CBF-55CE0206ACCD}"
@@ -42,6 +40,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Core.API", "Ecom.Core\src\Ecom.Core.API\Ecom.Core.API.csproj", "{39EC4DE8-D4E3-1BB0-7D61-6D5B6AF25EB6}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ecom.Core.Domain", "Ecom.Core\src\Ecom.Core.Domain\Ecom.Core.Domain.csproj", "{BC0D32B2-ADAB-3E83-E841-B553D75F08CD}"
+EndProject
+Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{81DDED9D-158B-E303-5F62-77A2896D2A5A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -149,18 +149,6 @@ Global
 		{FF46FD4F-0AFF-D2EE-C230-1E692BB0DD0F}.Release|x64.Build.0 = Release|Any CPU
 		{FF46FD4F-0AFF-D2EE-C230-1E692BB0DD0F}.Release|x86.ActiveCfg = Release|Any CPU
 		{FF46FD4F-0AFF-D2EE-C230-1E692BB0DD0F}.Release|x86.Build.0 = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x64.Build.0 = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x86.Build.0 = Debug|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x64.ActiveCfg = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x64.Build.0 = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x86.ActiveCfg = Release|Any CPU
-		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x86.Build.0 = Release|Any CPU
 		{DA822C59-5C2D-6272-F375-1893DA63F01C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{DA822C59-5C2D-6272-F375-1893DA63F01C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DA822C59-5C2D-6272-F375-1893DA63F01C}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -221,6 +209,18 @@ Global
 		{BC0D32B2-ADAB-3E83-E841-B553D75F08CD}.Release|x64.Build.0 = Release|Any CPU
 		{BC0D32B2-ADAB-3E83-E841-B553D75F08CD}.Release|x86.ActiveCfg = Release|Any CPU
 		{BC0D32B2-ADAB-3E83-E841-B553D75F08CD}.Release|x86.Build.0 = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x64.Build.0 = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Debug|x86.Build.0 = Debug|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x64.ActiveCfg = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x64.Build.0 = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x86.ActiveCfg = Release|Any CPU
+		{81DDED9D-158B-E303-5F62-77A2896D2A5A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

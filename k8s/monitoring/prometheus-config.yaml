@@ -103,7 +103,7 @@ spec:
   ports:
   - port: 80
     targetPort: 8080
-    nodePort: 30001
+    nodePort: 30301
     name: core-metrics
   selector:
     app: ecom-core-api
@@ -120,7 +120,7 @@ spec:
   ports:
   - port: 80
     targetPort: 8080
-    nodePort: 30002
+    nodePort: 30302
     name: users-metrics
   selector:
     app: ecom-users-api

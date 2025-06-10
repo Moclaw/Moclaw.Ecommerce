@@ -1,0 +1,38 @@
+# This file provides Kubernetes equivalents for Docker Compose services
+# Use this for local development that mirrors Docker Compose behavior
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ecom-core-external
+  namespace: ecommerce
+  labels:
+    app: ecom-core-api
+    environment: development
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30301  # Maps to Docker Compose port 5301
+    name: http
+  selector:
+    app: ecom-core-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ecom-users-external
+  namespace: ecommerce
+  labels:
+    app: ecom-users-api
+    environment: development
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30302  # Maps to Docker Compose port 5302
+    name: http
+  selector:
+    app: ecom-users-api
