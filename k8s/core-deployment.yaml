@@ -7,7 +7,7 @@ metadata:
     app: ecom-core-api
     service: core
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: ecom-core-api
@@ -30,25 +30,25 @@ spec:
           name: http
         resources:
           limits:
-            cpu: "500m"
-            memory: "512Mi"
-          requests:
             cpu: "100m"
             memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
         livenessProbe:
           httpGet:
-            path: /health
+            path: /
             port: 8080
           initialDelaySeconds: 60
-          periodSeconds: 10
-          timeoutSeconds: 5
+          periodSeconds: 30
+          timeoutSeconds: 10
           failureThreshold: 5
         readinessProbe:
           httpGet:
-            path: /health
+            path: /
             port: 8080
           initialDelaySeconds: 30
-          periodSeconds: 5
+          periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         env:

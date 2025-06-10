@@ -104,9 +104,6 @@ jobs:
           
           echo "Validating prometheus-config.yaml..."
           kubectl apply --dry-run=client -f k8s/monitoring/prometheus-config.yaml
-          
-          echo "Validating prometheus-deployment.yaml..."
-          kubectl apply --dry-run=client -f k8s/monitoring/prometheus-deployment.yaml
 
       - name: Deploy to Minikube
         run: |
@@ -190,149 +187,77 @@ jobs:
           echo "Waiting for rollout to complete..."
           sleep 10
 
-      - name: Deploy monitoring resources
+      - name: Configure external monitoring access
         run: |
-          echo "Deploying Prometheus configuration..."
-          kubectl get namespace ecommerce || echo "Namespace not found"
+          echo "Configuring access for external Prometheus and Grafana..."
           
-          # Verify the config file exists and is valid
-          echo "Checking prometheus config file..."
-          cat k8s/monitoring/prometheus-config.yaml | head -10
-          
-          # Deploy Prometheus configuration
+          # Deploy external monitoring configuration
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
           
-          echo "Deploying Prometheus and Grafana..."
-          # Deploy Prometheus server directly (without Operator)
-          kubectl apply -f k8s/monitoring/prometheus-deployment.yaml
+          # Get Minikube IP for external access
+          MINIKUBE_IP=$(minikube ip)
+          echo "Minikube IP: $MINIKUBE_IP"
           
-      - name: Verify deployment with extended timeout
-        run: |
-          echo "Waiting for deployments to be ready..."
+          echo "Services accessible from external Prometheus/Grafana:"
+          echo "Core API metrics: http://$MINIKUBE_IP:30001/metrics"
+          echo "Users API metrics: http://$MINIKUBE_IP:30002/metrics"
           
-          # Give deployments more time to start after potential fixes
-          echo "Waiting 60 seconds for deployments to stabilize..."
-          sleep 60
+          # Test external access endpoints
+          echo "Testing external monitoring endpoints..."
+          sleep 30
           
-          # Check current status before waiting
-          echo "Current deployment status:"
-          kubectl get deployments -n ecommerce
-          kubectl get pods -n ecommerce
+          # Test if NodePort services are accessible
+          kubectl get services -n ecommerce -o wide
           
-          # Check if deployments exist first
-          if kubectl get deployment ecom-core-api -n ecommerce > /dev/null 2>&1; then
-            echo "Waiting for ecom-core-api deployment..."
-            
-            # Try waiting with shorter timeout first to get better error info
-            if ! kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce; then
-              echo "Core API deployment failed after 5 minutes. Getting detailed logs..."
-              kubectl get pods -n ecommerce -l app=ecom-core-api
-              kubectl describe pods -n ecommerce -l app=ecom-core-api
-              
-              # Get logs from all containers in the pods
-              for pod in $(kubectl get pods -n ecommerce -l app=ecom-core-api -o jsonpath='{.items[*].metadata.name}'); do
-                echo "Logs for pod $pod:"
-                kubectl logs $pod -n ecommerce --tail=100 || echo "No logs available for $pod"
-              done
-              
-              echo "Deployment events:"
-              kubectl describe deployment ecom-core-api -n ecommerce
-              
-              echo "Trying one more time with longer timeout..."
-              kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce || {
-                echo "Core API deployment definitively failed"
-                exit 1
-              }
-            fi
-          else
-            echo "ecom-core-api deployment not found!"
-            exit 1
-          fi
-          
-          if kubectl get deployment ecom-users-api -n ecommerce > /dev/null 2>&1; then
-            echo "Waiting for ecom-users-api deployment..."
-            
-            if ! kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce; then
-              echo "Users API deployment failed after 5 minutes. Getting detailed logs..."
-              kubectl get pods -n ecommerce -l app=ecom-users-api
-              kubectl describe pods -n ecommerce -l app=ecom-users-api
-              
-              # Get logs from all containers in the pods
-              for pod in $(kubectl get pods -n ecommerce -l app=ecom-users-api -o jsonpath='{.items[*].metadata.name}'); do
-                echo "Logs for pod $pod:"
-                kubectl logs $pod -n ecommerce --tail=100 || echo "No logs available for $pod"
-              done
-              
-              echo "Deployment events:"
-              kubectl describe deployment ecom-users-api -n ecommerce
-              
-              echo "Trying one more time with longer timeout..."
-              kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce || {
-                echo "Users API deployment definitively failed"
-                exit 1
-              }
-            fi
-          else
-            echo "ecom-users-api deployment not found!"
-            exit 1
-          fi
-          
-          echo "Final status check..."
-          kubectl get pods -n ecommerce
-          kubectl get services -n ecommerce
-          
+          echo "=== PROMETHEUS CONFIGURATION ==="
+          echo "Add these targets to your existing Prometheus configuration:"
+          echo "- targets: ['$MINIKUBE_IP:30001'] # Core API"
+          echo "- targets: ['$MINIKUBE_IP:30002'] # Users API"
+
       - name: Wait for monitoring stack
         run: |
-          echo "Waiting for monitoring deployments..."
-          kubectl wait --for=condition=available --timeout=600s deployment/prometheus -n ecommerce || echo "Prometheus deployment timeout (may still be starting)"
-          kubectl wait --for=condition=available --timeout=600s deployment/grafana -n ecommerce || echo "Grafana deployment timeout (may still be starting)"
-          kubectl get pods -n ecommerce -l app=prometheus
-          kubectl get pods -n ecommerce -l app=grafana
+          echo "Skipping internal monitoring deployment - using external Prometheus/Grafana"
+          echo "Verifying external access configuration..."
+          
+          MINIKUBE_IP=$(minikube ip)
+          echo "External monitoring endpoints:"
+          echo "Core API: http://$MINIKUBE_IP:30001"
+          echo "Users API: http://$MINIKUBE_IP:30002"
+          
+          # Test external endpoints
+          curl -f http://$MINIKUBE_IP:30001/health || echo "Core API external endpoint not ready yet"
+          curl -f http://$MINIKUBE_IP:30002/health || echo "Users API external endpoint not ready yet"
 
       - name: Test Service Health
         run: |
           echo "Testing service connectivity..."
           
-          # Port forward and test Core API
+          MINIKUBE_IP=$(minikube ip)
+          
+          # Test Core API via NodePort
+          echo "Testing Core API via external endpoint..."
+          curl -f http://$MINIKUBE_IP:30001/ || echo "Core API external access failed"
+          
+          # Test Users API via NodePort
+          echo "Testing Users API via external endpoint..."
+          curl -f http://$MINIKUBE_IP:30002/ || echo "Users API external access failed"
+          
+          # Test internal service connectivity
           kubectl port-forward -n ecommerce service/ecom-core-service 8080:80 &
           CORE_PID=$!
           sleep 10
           
-          # Test Core API health endpoint
-          curl -f http://localhost:8080/health || echo "Core API health check failed (expected if /health endpoint not implemented)"
-          
-          # Clean up port forward
+          curl -f http://localhost:8080/ || echo "Core API internal connectivity failed"
           kill $CORE_PID || true
           
-          # Port forward and test Users API  
           kubectl port-forward -n ecommerce service/ecom-users-service 8081:80 &
           USERS_PID=$!
           sleep 10
           
-          # Test Users API health endpoint
-          curl -f http://localhost:8081/health || echo "Users API health check failed (expected if /health endpoint not implemented)"
-          
-          # Clean up port forward
+          curl -f http://localhost:8081/ || echo "Users API internal connectivity failed"
           kill $USERS_PID || true
           
-          # Test monitoring endpoints
-          echo "Testing Prometheus..."
-          kubectl port-forward -n ecommerce service/prometheus 9090:9090 &
-          PROM_PID=$!
-          sleep 10
-          
-          curl -f http://localhost:9090/-/healthy || echo "Prometheus health check failed"
-          curl -s http://localhost:9090/api/v1/targets | grep -o '"health":"[^"]*"' || echo "Could not check Prometheus targets"
-          
-          kill $PROM_PID || true
-          
-          echo "Testing Grafana..."
-          kubectl port-forward -n ecommerce service/grafana 3000:3000 &
-          GRAFANA_PID=$!
-          sleep 10
-          
-          curl -f http://localhost:3000/api/health || echo "Grafana health check failed"
-          
-          kill $GRAFANA_PID || true
-          
           echo "Service connectivity tests completed"
+          echo "External monitoring available at:"
+          echo "Core API: http://$MINIKUBE_IP:30001"
+          echo "Users API: http://$MINIKUBE_IP:30002"

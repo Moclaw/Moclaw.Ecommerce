@@ -49,3 +49,78 @@ data:
         - source_labels: [__meta_kubernetes_pod_name]
           action: replace
           target_label: kubernetes_pod_name
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-external-config
+  namespace: ecommerce
+data:
+  kubernetes-scrape-config.yml: |
+    # Add this to your existing Prometheus configuration on self-hosted runner
+    scrape_configs:
+      - job_name: 'ecom-core-api-k8s'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - ecommerce
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: ecom-core-service
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: http
+        - target_label: __address__
+          replacement: minikube_ip:service_port
+        
+      - job_name: 'ecom-users-api-k8s'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - ecommerce
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: ecom-users-service
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: http
+        - target_label: __address__
+          replacement: minikube_ip:service_port
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-prometheus-access
+  namespace: ecommerce
+  labels:
+    app: external-monitoring
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30001
+    name: core-metrics
+  selector:
+    app: ecom-core-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: external-prometheus-access-users
+  namespace: ecommerce
+  labels:
+    app: external-monitoring
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30002
+    name: users-metrics
+  selector:
+    app: ecom-users-api
