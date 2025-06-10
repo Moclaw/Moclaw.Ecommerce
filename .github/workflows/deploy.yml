@@ -13,10 +13,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.0.x'
+      - name: Setup .NET with proper permissions
+        run: |
+          echo "Setting up .NET for self-hosted runner..."
+          
+          # Check if .NET is already installed
+          if command -v dotnet &> /dev/null; then
+            echo ".NET is already installed:"
+            dotnet --version
+            dotnet --list-sdks
+          else
+            echo "Installing .NET manually..."
+            
+            # Create local dotnet directory
+            mkdir -p $HOME/.dotnet
+            export DOTNET_ROOT=$HOME/.dotnet
+            export PATH=$DOTNET_ROOT:$PATH
+            
+            # Download and install .NET
+            curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir $HOME/.dotnet
+            
+            # Add to PATH for subsequent steps
+            echo "DOTNET_ROOT=$HOME/.dotnet" >> $GITHUB_ENV
+            echo "$HOME/.dotnet" >> $GITHUB_PATH
+            
+            echo "Verifying installation:"
+            $HOME/.dotnet/dotnet --version
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
