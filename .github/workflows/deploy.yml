@@ -40,34 +40,67 @@ jobs:
             $HOME/.dotnet/dotnet --version
           fi
 
+      - name: Cleanup existing containers
+        run: |
+          echo "Cleaning up existing containers and freeing ports..."
+          docker compose down --remove-orphans || true
+          docker system prune -f || true
+          
+          # Kill any processes using our ports
+          sudo lsof -ti:5301 | xargs -r sudo kill -9 || true
+          sudo lsof -ti:5302 | xargs -r sudo kill -9 || true
+          sudo lsof -ti:9090 | xargs -r sudo kill -9 || true
+          sudo lsof -ti:3000 | xargs -r sudo kill -9 || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
         with:
           driver-opts: |
             network=host
 
-      - name: Build and test with Docker Compose
+      - name: Build and test with Docker Compose (CI Environment)
         run: |
-          echo "Building services with Docker Compose..."
+          echo "Building services with Docker Compose for CI testing..."
+          
+          # Create a CI-specific docker-compose override
+          cat > docker-compose.ci.yml << EOF
+          version: '3.8'
+          services:
+            ecom.core.api:
+              ports:
+                - "5401:8080"  # Different ports for CI
+            ecom.users.api:
+              ports:
+                - "5402:8080"
+            prometheus:
+              ports:
+                - "9091:9090"  # Different port for CI
+            grafana:
+              ports:
+                - "3001:3000"  # Different port for CI
+          EOF
           
           # Build all services
-          docker compose build
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml build
           
           # Start services in detached mode
-          docker compose up -d
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
           
           echo "Waiting for services to start..."
           sleep 30
           
-          # Test services
-          echo "Testing Core API on port 5301..."
-          curl -f http://localhost:5301/health || curl -f http://localhost:5301/ || echo "Core API not responding"
+          # Test services on CI ports
+          echo "Testing Core API on CI port 5401..."
+          curl -f http://localhost:5401/health || curl -f http://localhost:5401/ || echo "Core API not responding"
           
-          echo "Testing Users API on port 5302..."
-          curl -f http://localhost:5302/health || curl -f http://localhost:5302/ || echo "Users API not responding"
+          echo "Testing Users API on CI port 5402..."
+          curl -f http://localhost:5402/health || curl -f http://localhost:5402/ || echo "Users API not responding"
+          
+          echo "Testing Prometheus on CI port 9091..."
+          curl -f http://localhost:9091/ || echo "Prometheus not responding"
           
           # Stop Docker Compose services
-          docker compose down
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down
           
           echo "Docker Compose build and test completed successfully"
 
@@ -139,24 +172,52 @@ jobs:
           curl -f http://$MINIKUBE_IP:30302/ || echo "Users API NodePort not accessible"
           
           # Test internal service connectivity
-          kubectl port-forward -n ecommerce service/ecom-core-service 5301:80 &
+          kubectl port-forward -n ecommerce service/ecom-core-service 5501:80 &
           CORE_PID=$!
           sleep 10
-          curl -f http://localhost:5301/ || echo "Core API service not accessible"
+          curl -f http://localhost:5501/ || echo "Core API service not accessible"
           kill $CORE_PID || true
           
-          kubectl port-forward -n ecommerce service/ecom-users-service 5302:80 &
+          kubectl port-forward -n ecommerce service/ecom-users-service 5502:80 &
           USERS_PID=$!
           sleep 10
-          curl -f http://localhost:5302/ || echo "Users API service not accessible"
+          curl -f http://localhost:5502/ || echo "Users API service not accessible"
           kill $USERS_PID || true
+
+      - name: Deploy production environment
+        run: |
+          echo "Deploying production environment..."
+          
+          # Stop any existing production containers
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml down || true
+          
+          # Start production environment
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+          
+          echo "Waiting for production services..."
+          sleep 30
+          
+          # Test production services
+          echo "Testing Production Core API on port 5301..."
+          curl -f http://localhost:5301/health || curl -f http://localhost:5301/ || echo "Production Core API not responding"
+          
+          echo "Testing Production Users API on port 5302..."
+          curl -f http://localhost:5302/health || curl -f http://localhost:5302/ || echo "Production Users API not responding"
+          
+          echo "Testing Production Prometheus on port 9090..."
+          curl -f http://localhost:9090/ || echo "Production Prometheus not responding"
+          
+          echo "Testing Production Grafana on port 3000..."
+          curl -f http://localhost:3000/ || echo "Production Grafana not responding"
 
       - name: Display deployment summary
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
-          echo "Docker Compose Services:"
+          echo "Production Docker Compose Services:"
           echo "- Core API: http://localhost:5301"
           echo "- Users API: http://localhost:5302"
+          echo "- Prometheus: http://localhost:9090"
+          echo "- Grafana: http://localhost:3000 (admin/admin123)"
           echo ""
           
           MINIKUBE_IP=$(minikube ip)
@@ -167,3 +228,6 @@ jobs:
           echo "Kubernetes Cluster Status:"
           kubectl get pods -n ecommerce
           kubectl get services -n ecommerce
+          echo ""
+          echo "Production Environment Status:"
+          docker compose ps
