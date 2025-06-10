@@ -40,17 +40,35 @@ jobs:
             $HOME/.dotnet/dotnet --version
           fi
 
-      - name: Cleanup existing containers
+      - name: Comprehensive cleanup of existing containers
         run: |
-          echo "Cleaning up existing containers and freeing ports..."
+          echo "Comprehensive cleanup of existing containers and ports..."
+          
+          # Stop and remove all containers from this project
           docker compose down --remove-orphans || true
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
+          
+          # Stop and remove any containers using our target ports
+          echo "Stopping containers using target ports..."
+          docker ps --format "table {{.ID}}\t{{.Ports}}" | grep -E "(5301|5302|9090|3000)" | awk '{print $1}' | xargs -r docker stop || true
+          docker ps -a --format "table {{.ID}}\t{{.Ports}}" | grep -E "(5301|5302|9090|3000)" | awk '{print $1}' | xargs -r docker rm || true
+          
+          # Stop specific containers by name patterns
+          docker ps -a --format "table {{.Names}}" | grep -E "(prometheus|grafana|ecom)" | xargs -r docker rm -f || true
+          
+          # Kill any processes using our ports (be more specific)
+          echo "Freeing up ports..."
+          for port in 5301 5302 9090 3000 5401 5402 9091 3001; do
+            if sudo lsof -ti:$port >/dev/null 2>&1; then
+              echo "Killing processes on port $port"
+              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+            fi
+          done
+          
+          # Clean up Docker system
           docker system prune -f || true
           
-          # Kill any processes using our ports
-          sudo lsof -ti:5301 | xargs -r sudo kill -9 || true
-          sudo lsof -ti:5302 | xargs -r sudo kill -9 || true
-          sudo lsof -ti:9090 | xargs -r sudo kill -9 || true
-          sudo lsof -ti:3000 | xargs -r sudo kill -9 || true
+          echo "Cleanup completed"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -62,22 +80,30 @@ jobs:
         run: |
           echo "Building services with Docker Compose for CI testing..."
           
-          # Create a CI-specific docker-compose override
+          # Find available ports for CI
+          CI_CORE_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+          CI_USERS_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+          CI_PROMETHEUS_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+          CI_GRAFANA_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+          
+          echo "Using CI ports: Core=$CI_CORE_PORT, Users=$CI_USERS_PORT, Prometheus=$CI_PROMETHEUS_PORT, Grafana=$CI_GRAFANA_PORT"
+          
+          # Create a CI-specific docker-compose override with dynamic ports
           cat > docker-compose.ci.yml << EOF
           version: '3.8'
           services:
             ecom.core.api:
               ports:
-                - "5401:8080"  # Different ports for CI
+                - "$CI_CORE_PORT:8080"
             ecom.users.api:
               ports:
-                - "5402:8080"
+                - "$CI_USERS_PORT:8080"
             prometheus:
               ports:
-                - "9091:9090"  # Different port for CI
+                - "$CI_PROMETHEUS_PORT:9090"
             grafana:
               ports:
-                - "3001:3000"  # Different port for CI
+                - "$CI_GRAFANA_PORT:3000"
           EOF
           
           # Build all services
@@ -90,14 +116,14 @@ jobs:
           sleep 30
           
           # Test services on CI ports
-          echo "Testing Core API on CI port 5401..."
-          curl -f http://localhost:5401/health || curl -f http://localhost:5401/ || echo "Core API not responding"
+          echo "Testing Core API on CI port $CI_CORE_PORT..."
+          curl -f http://localhost:$CI_CORE_PORT/health || curl -f http://localhost:$CI_CORE_PORT/ || echo "Core API not responding"
           
-          echo "Testing Users API on CI port 5402..."
-          curl -f http://localhost:5402/health || curl -f http://localhost:5402/ || echo "Users API not responding"
+          echo "Testing Users API on CI port $CI_USERS_PORT..."
+          curl -f http://localhost:$CI_USERS_PORT/health || curl -f http://localhost:$CI_USERS_PORT/ || echo "Users API not responding"
           
-          echo "Testing Prometheus on CI port 9091..."
-          curl -f http://localhost:9091/ || echo "Prometheus not responding"
+          echo "Testing Prometheus on CI port $CI_PROMETHEUS_PORT..."
+          curl -f http://localhost:$CI_PROMETHEUS_PORT/ || echo "Prometheus not responding"
           
           # Stop Docker Compose services
           docker compose -f docker-compose.yml -f docker-compose.ci.yml down
@@ -184,40 +210,57 @@ jobs:
           curl -f http://localhost:5502/ || echo "Users API service not accessible"
           kill $USERS_PID || true
 
-      - name: Deploy production environment
+      - name: Conditional production deployment
         run: |
-          echo "Deploying production environment..."
+          echo "Checking if production ports are available..."
           
-          # Stop any existing production containers
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml down || true
+          # Check if production ports are free
+          PORTS_AVAILABLE=true
+          for port in 5301 5302 9090 3000; do
+            if sudo lsof -ti:$port >/dev/null 2>&1; then
+              echo "Port $port is already in use"
+              PORTS_AVAILABLE=false
+            fi
+          done
           
-          # Start production environment
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-          
-          echo "Waiting for production services..."
-          sleep 30
-          
-          # Test production services
-          echo "Testing Production Core API on port 5301..."
-          curl -f http://localhost:5301/health || curl -f http://localhost:5301/ || echo "Production Core API not responding"
-          
-          echo "Testing Production Users API on port 5302..."
-          curl -f http://localhost:5302/health || curl -f http://localhost:5302/ || echo "Production Users API not responding"
-          
-          echo "Testing Production Prometheus on port 9090..."
-          curl -f http://localhost:9090/ || echo "Production Prometheus not responding"
-          
-          echo "Testing Production Grafana on port 3000..."
-          curl -f http://localhost:3000/ || echo "Production Grafana not responding"
+          if [ "$PORTS_AVAILABLE" = true ]; then
+            echo "Deploying production environment..."
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            
+            echo "Waiting for production services..."
+            sleep 30
+            
+            # Test production services
+            echo "Testing Production Core API on port 5301..."
+            curl -f http://localhost:5301/health || curl -f http://localhost:5301/ || echo "Production Core API not responding"
+            
+            echo "Testing Production Users API on port 5302..."
+            curl -f http://localhost:5302/health || curl -f http://localhost:5302/ || echo "Production Users API not responding"
+            
+            echo "Testing Production Prometheus on port 9090..."
+            curl -f http://localhost:9090/ || echo "Production Prometheus not responding"
+            
+            echo "Testing Production Grafana on port 3000..."
+            curl -f http://localhost:3000/ || echo "Production Grafana not responding"
+          else
+            echo "Production ports are occupied. Skipping production deployment."
+            echo "Please manually stop existing services on ports 5301, 5302, 9090, 3000 if you want to deploy production environment."
+          fi
 
       - name: Display deployment summary
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
-          echo "Production Docker Compose Services:"
-          echo "- Core API: http://localhost:5301"
-          echo "- Users API: http://localhost:5302"
-          echo "- Prometheus: http://localhost:9090"
-          echo "- Grafana: http://localhost:3000 (admin/admin123)"
+          
+          # Check if production is running
+          if docker compose ps | grep -q "Up"; then
+            echo "Production Docker Compose Services (RUNNING):"
+            echo "- Core API: http://localhost:5301"
+            echo "- Users API: http://localhost:5302"
+            echo "- Prometheus: http://localhost:9090"
+            echo "- Grafana: http://localhost:3000 (admin/admin123)"
+          else
+            echo "Production Docker Compose Services: NOT RUNNING (ports may be occupied)"
+          fi
           echo ""
           
           MINIKUBE_IP=$(minikube ip)
@@ -229,5 +272,5 @@ jobs:
           kubectl get pods -n ecommerce
           kubectl get services -n ecommerce
           echo ""
-          echo "Production Environment Status:"
-          docker compose ps
+          echo "Current Docker Containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
