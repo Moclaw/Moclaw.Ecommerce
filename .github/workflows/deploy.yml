@@ -43,40 +43,110 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-
-      - name: Build Core API Docker image
-        uses: docker/build-push-action@v4
         with:
-          context: .
-          file: Ecom.Core/src/Ecom.Core.API/Dockerfile
-          push: false
-          load: true
-          tags: moclaw/ecom-core-api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          driver-opts: |
+            network=host
 
-      - name: Build Users API Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: Ecom.Users/src/Ecom.Users.API/Dockerfile
-          push: false
-          load: true
-          tags: moclaw/ecom-users-api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build Core API Docker image with retry
+        run: |
+          echo "Building Core API Docker image with retry logic..."
+          
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt/3 for Core API build..."
+            
+            if docker buildx build \
+              --file Ecom.Core/src/Ecom.Core.API/Dockerfile \
+              --tag moclaw/ecom-core-api:latest \
+              --load \
+              --progress=plain \
+              --no-cache-filter=build \
+              .; then
+              echo "Core API build successful on attempt $attempt"
+              break
+            else
+              echo "Core API build failed on attempt $attempt"
+              if [ $attempt -eq 3 ]; then
+                echo "All attempts failed for Core API build"
+                exit 1
+              fi
+              echo "Waiting 30 seconds before retry..."
+              sleep 30
+              
+              # Clean up any partial builds
+              docker buildx prune -f || true
+            fi
+          done
+          
+          echo "Verifying Core API image..."
+          docker images | grep moclaw/ecom-core-api
+
+      - name: Build Users API Docker image with retry
+        run: |
+          echo "Building Users API Docker image with retry logic..."
+          
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt/3 for Users API build..."
+            
+            if docker buildx build \
+              --file Ecom.Users/src/Ecom.Users.API/Dockerfile \
+              --tag moclaw/ecom-users-api:latest \
+              --load \
+              --progress=plain \
+              --no-cache-filter=build \
+              .; then
+              echo "Users API build successful on attempt $attempt"
+              break
+            else
+              echo "Users API build failed on attempt $attempt"
+              if [ $attempt -eq 3 ]; then
+                echo "All attempts failed for Users API build"
+                exit 1
+              fi
+              echo "Waiting 30 seconds before retry..."
+              sleep 30
+              
+              # Clean up any partial builds
+              docker buildx prune -f || true
+            fi
+          done
+          
+          echo "Verifying Users API image..."
+          docker images | grep moclaw/ecom-users-api
 
       - name: Set up Minikube
         uses: medyagh/setup-minikube@latest
-
-      - name: Load images to Minikube
+        with:
+          driver: docker
+          container-runtime: docker
+          
+      - name: Load images to Minikube with verification
         run: |
           echo "Loading images to Minikube..."
-          minikube image load moclaw/ecom-core-api:latest
-          minikube image load moclaw/ecom-users-api:latest
+          
+          # Verify images exist locally first
+          echo "Local Docker images:"
+          docker images | grep moclaw
+          
+          # Load images with retry
+          for image in "moclaw/ecom-core-api:latest" "moclaw/ecom-users-api:latest"; do
+            echo "Loading $image..."
+            for attempt in 1 2 3; do
+              if minikube image load $image; then
+                echo "$image loaded successfully"
+                break
+              else
+                echo "Failed to load $image on attempt $attempt"
+                if [ $attempt -eq 3 ]; then
+                  echo "Failed to load $image after 3 attempts"
+                  exit 1
+                fi
+                sleep 10
+              fi
+            done
+          done
           
           echo "Verifying images are loaded in Minikube..."
-          minikube image ls | grep moclaw || echo "No moclaw images found"
+          minikube image ls | grep moclaw || echo "No moclaw images found in Minikube"
           
           echo "All images in Minikube:"
           minikube image ls
@@ -261,3 +331,66 @@ jobs:
           echo "External monitoring available at:"
           echo "Core API: http://$MINIKUBE_IP:30001"
           echo "Users API: http://$MINIKUBE_IP:30002"
+          
+      - name: Verify deployment with extended timeout
+        run: |
+          echo "Waiting for deployments to be ready..."
+          
+          # Give deployments more time to start after potential fixes
+          echo "Waiting 60 seconds for deployments to stabilize..."
+          sleep 60
+          
+          # Check current status before waiting
+          echo "Current deployment status:"
+          kubectl get deployments -n ecommerce
+          kubectl get pods -n ecommerce
+          
+          # Function to wait for deployment with better error handling
+          wait_for_deployment() {
+            local deployment_name=$1
+            local app_label=$2
+            
+            echo "Waiting for $deployment_name deployment..."
+            
+            if kubectl get deployment $deployment_name -n ecommerce > /dev/null 2>&1; then
+              # Check if deployment is progressing
+              for i in {1..10}; do
+                echo "Check $i/10: Deployment status..."
+                kubectl get deployment $deployment_name -n ecommerce
+                kubectl get pods -n ecommerce -l app=$app_label
+                
+                if kubectl wait --for=condition=available --timeout=60s deployment/$deployment_name -n ecommerce; then
+                  echo "$deployment_name is ready!"
+                  return 0
+                fi
+                
+                echo "Still waiting for $deployment_name... Getting diagnostics..."
+                kubectl describe deployment $deployment_name -n ecommerce
+                kubectl get events -n ecommerce --field-selector involvedObject.name=$deployment_name
+                
+                # Get pod logs if available
+                for pod in $(kubectl get pods -n ecommerce -l app=$app_label -o jsonpath='{.items[*].metadata.name}'); do
+                  echo "Logs for pod $pod:"
+                  kubectl logs $pod -n ecommerce --tail=20 || echo "No logs available for $pod"
+                done
+                
+                sleep 30
+              done
+              
+              echo "$deployment_name failed to become ready"
+              return 1
+            else
+              echo "$deployment_name deployment not found!"
+              return 1
+            fi
+          }
+          
+          # Wait for Core API
+          wait_for_deployment "ecom-core-api" "ecom-core-api"
+          
+          # Wait for Users API
+          wait_for_deployment "ecom-users-api" "ecom-users-api"
+          
+          echo "Final status check..."
+          kubectl get pods -n ecommerce
+          kubectl get services -n ecommerce
