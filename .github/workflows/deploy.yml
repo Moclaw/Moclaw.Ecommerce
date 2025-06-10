@@ -129,6 +129,46 @@ jobs:
           echo "Checking if pods are stuck in ImagePull..."
           kubectl get pods -n ecommerce -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].state}{"\n"}{end}' || echo "No pods found"
 
+      - name: Fix common deployment issues
+        run: |
+          echo "=== FIXING COMMON DEPLOYMENT ISSUES ==="
+          
+          # Wait a bit for initial deployment attempt
+          sleep 30
+          
+          # Check for ImagePullBackOff or ErrImagePull issues
+          echo "Checking for image pull issues..."
+          kubectl get pods -n ecommerce
+          
+          FAILED_PODS=$(kubectl get pods -n ecommerce --field-selector=status.phase!=Running,status.phase!=Succeeded -o jsonpath='{.items[*].metadata.name}')
+          
+          if [ ! -z "$FAILED_PODS" ]; then
+            echo "Found problematic pods: $FAILED_PODS"
+            
+            for pod in $FAILED_PODS; do
+              echo "Describing pod $pod..."
+              kubectl describe pod $pod -n ecommerce
+              
+              # Check if it's an image pull issue
+              if kubectl get pod $pod -n ecommerce -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' | grep -E "(ImagePullBackOff|ErrImagePull)"; then
+                echo "Pod $pod has image pull issues. Checking deployment imagePullPolicy..."
+                
+                # Get the deployment name from pod labels
+                DEPLOYMENT=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.metadata.labels.app}')
+                if [ ! -z "$DEPLOYMENT" ]; then
+                  echo "Patching deployment $DEPLOYMENT to use imagePullPolicy: Never for Minikube..."
+                  kubectl patch deployment $DEPLOYMENT -n ecommerce -p '{"spec":{"template":{"spec":{"containers":[{"name":"'$DEPLOYMENT'","imagePullPolicy":"Never"}]}}}}'
+                  
+                  echo "Restarting deployment $DEPLOYMENT..."
+                  kubectl rollout restart deployment/$DEPLOYMENT -n ecommerce
+                fi
+              fi
+            done
+          fi
+          
+          echo "Waiting for rollout to complete..."
+          sleep 10
+
       - name: Deploy monitoring resources
         run: |
           echo "Deploying Prometheus configuration..."
@@ -149,16 +189,40 @@ jobs:
         run: |
           echo "Waiting for deployments to be ready..."
           
+          # Give deployments more time to start after potential fixes
+          echo "Waiting 60 seconds for deployments to stabilize..."
+          sleep 60
+          
+          # Check current status before waiting
+          echo "Current deployment status:"
+          kubectl get deployments -n ecommerce
+          kubectl get pods -n ecommerce
+          
           # Check if deployments exist first
           if kubectl get deployment ecom-core-api -n ecommerce > /dev/null 2>&1; then
             echo "Waiting for ecom-core-api deployment..."
-            kubectl wait --for=condition=available --timeout=600s deployment/ecom-core-api -n ecommerce || {
-              echo "Core API deployment failed. Getting logs..."
+            
+            # Try waiting with shorter timeout first to get better error info
+            if ! kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce; then
+              echo "Core API deployment failed after 5 minutes. Getting detailed logs..."
               kubectl get pods -n ecommerce -l app=ecom-core-api
               kubectl describe pods -n ecommerce -l app=ecom-core-api
-              kubectl logs -n ecommerce -l app=ecom-core-api --tail=50 || echo "No logs available"
-              exit 1
-            }
+              
+              # Get logs from all containers in the pods
+              for pod in $(kubectl get pods -n ecommerce -l app=ecom-core-api -o jsonpath='{.items[*].metadata.name}'); do
+                echo "Logs for pod $pod:"
+                kubectl logs $pod -n ecommerce --tail=100 || echo "No logs available for $pod"
+              done
+              
+              echo "Deployment events:"
+              kubectl describe deployment ecom-core-api -n ecommerce
+              
+              echo "Trying one more time with longer timeout..."
+              kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce || {
+                echo "Core API deployment definitively failed"
+                exit 1
+              }
+            fi
           else
             echo "ecom-core-api deployment not found!"
             exit 1
@@ -166,13 +230,27 @@ jobs:
           
           if kubectl get deployment ecom-users-api -n ecommerce > /dev/null 2>&1; then
             echo "Waiting for ecom-users-api deployment..."
-            kubectl wait --for=condition=available --timeout=600s deployment/ecom-users-api -n ecommerce || {
-              echo "Users API deployment failed. Getting logs..."
+            
+            if ! kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce; then
+              echo "Users API deployment failed after 5 minutes. Getting detailed logs..."
               kubectl get pods -n ecommerce -l app=ecom-users-api
               kubectl describe pods -n ecommerce -l app=ecom-users-api
-              kubectl logs -n ecommerce -l app=ecom-users-api --tail=50 || echo "No logs available"
-              exit 1
-            }
+              
+              # Get logs from all containers in the pods
+              for pod in $(kubectl get pods -n ecommerce -l app=ecom-users-api -o jsonpath='{.items[*].metadata.name}'); do
+                echo "Logs for pod $pod:"
+                kubectl logs $pod -n ecommerce --tail=100 || echo "No logs available for $pod"
+              done
+              
+              echo "Deployment events:"
+              kubectl describe deployment ecom-users-api -n ecommerce
+              
+              echo "Trying one more time with longer timeout..."
+              kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce || {
+                echo "Users API deployment definitively failed"
+                exit 1
+              }
+            fi
           else
             echo "ecom-users-api deployment not found!"
             exit 1
