@@ -85,8 +85,9 @@ jobs:
           echo "Creating namespace..."
           kubectl apply -f k8s/namespace.yaml
           
-          echo "Waiting for namespace to be ready..."
-          kubectl wait --for=condition=Active --timeout=60s namespace/ecommerce
+          echo "Verifying namespace creation..."
+          kubectl get namespace ecommerce
+          sleep 5
           
           echo "Deploying applications..."
           kubectl apply -f k8s/core-deployment.yaml
