@@ -24,7 +24,7 @@ spec:
       containers:
       - name: ecom-core-api
         image: moclaw/ecom-core-api:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
           name: http
@@ -39,19 +39,25 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 15
+          initialDelaySeconds: 30
           periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 3
         env:
         - name: ASPNETCORE_ENVIRONMENT
           value: "Production"
         - name: ASPNETCORE_URLS
           value: "http://+:8080"
+        - name: ElasticApm__Enabled
+          value: "false"
 ---
 apiVersion: v1
 kind: Service

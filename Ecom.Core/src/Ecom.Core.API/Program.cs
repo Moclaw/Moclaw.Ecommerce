@@ -33,6 +33,9 @@ var versioningOptions = new DefaultVersioningOptions
 // Configure Serilog
 builder.AddSerilog(configuration, appName);
 
+// Add health checks
+builder.Services.AddHealthChecks();
+
 // Add API Explorer services (required for Swagger with minimal APIs)
 builder.Services.AddEndpointsApiExplorer();
 
@@ -81,15 +84,17 @@ app.UseHttpsRedirection();
 // Configure Global Exception Handling
 app.UseGlobalExceptionHandling();
 
-// Configure ARM Elastic
-app.UseElasticApm(configuration);
+// Configure ARM Elastic (disable in Kubernetes to prevent connection issues)
+if (!builder.Environment.IsProduction())
+{
+    app.UseElasticApm(configuration);
+}
 
 app.UseRouting();
 
-// Configure Health Check
-//app.UseHealthChecks(configuration);
+// Configure Health Check endpoint
+app.MapHealthChecks("/health");
 
 // Map all endpoints from the assembly
-
 
 await app.RunAsync();

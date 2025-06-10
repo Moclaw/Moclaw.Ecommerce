@@ -24,6 +24,9 @@ var configuration = builder.Configuration;
 // Configure Serilog
 builder.AddSerilog(configuration, appName);
 
+// Add health checks
+builder.Services.AddHealthChecks();
+
 // Configure JWT Authentication
 var jwtOptions = configuration.GetSection("JwtOptions").Get<JwtOptions>();
 builder
@@ -116,8 +119,11 @@ app.UseHttpsRedirection();
 // Configure Global Exception Handling
 app.UseGlobalExceptionHandling();
 
-// Configure ARM Elastic
-app.UseElasticApm(configuration);
+// Configure ARM Elastic (disable in Kubernetes to prevent connection issues)
+if (!builder.Environment.IsProduction())
+{
+    app.UseElasticApm(configuration);
+}
 
 app.UseRouting();
 
@@ -128,7 +134,7 @@ app.UseAuthorization();
 // Configure Permission Middleware
 app.UsePermissionMiddleware();
 
-// Configure Health Check
-//app.UseHealthChecks(configuration);
+// Configure Health Check endpoint
+app.MapHealthChecks("/health");
 
 await app.RunAsync();
