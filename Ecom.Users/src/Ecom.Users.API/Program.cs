@@ -111,7 +111,7 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 // Configure CORS
-app.UseCorsServices(configuration);
+// app.UseCorsServices(configuration);
 
 // Configure Global Exception Handling
 app.UseGlobalExceptionHandling();
