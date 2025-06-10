@@ -50,8 +50,15 @@ jobs:
 
       - name: Load images to Minikube
         run: |
+          echo "Loading images to Minikube..."
           minikube image load moclaw/ecom-core-api:latest
           minikube image load moclaw/ecom-users-api:latest
+          
+          echo "Verifying images are loaded in Minikube..."
+          minikube image ls | grep moclaw || echo "No moclaw images found"
+          
+          echo "All images in Minikube:"
+          minikube image ls
           
       - name: Validate Kubernetes manifests
         run: |
@@ -93,6 +100,34 @@ jobs:
           kubectl apply -f k8s/core-deployment.yaml
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/configmap.yaml
+          
+          echo "Checking if deployments were created..."
+          kubectl get deployments -n ecommerce
+          
+          echo "Checking initial pod status..."
+          kubectl get pods -n ecommerce
+          
+      - name: Debug deployment issues
+        run: |
+          echo "=== DEBUGGING DEPLOYMENT ISSUES ==="
+          
+          echo "Checking deployment status..."
+          kubectl get deployments -n ecommerce -o wide
+          
+          echo "Checking pods with detailed info..."
+          kubectl get pods -n ecommerce -o wide
+          
+          echo "Describing ecom-core-api deployment..."
+          kubectl describe deployment ecom-core-api -n ecommerce || echo "Core deployment not found"
+          
+          echo "Describing ecom-users-api deployment..."
+          kubectl describe deployment ecom-users-api -n ecommerce || echo "Users deployment not found"
+          
+          echo "Checking events in ecommerce namespace..."
+          kubectl get events -n ecommerce --sort-by='.lastTimestamp'
+          
+          echo "Checking if pods are stuck in ImagePull..."
+          kubectl get pods -n ecommerce -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[0].state}{"\n"}{end}' || echo "No pods found"
 
       - name: Deploy monitoring resources
         run: |
@@ -110,18 +145,48 @@ jobs:
           # Deploy Prometheus server directly (without Operator)
           kubectl apply -f k8s/monitoring/prometheus-deployment.yaml
           
-      - name: Verify deployment
+      - name: Verify deployment with extended timeout
         run: |
-          kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce
-          kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce
+          echo "Waiting for deployments to be ready..."
+          
+          # Check if deployments exist first
+          if kubectl get deployment ecom-core-api -n ecommerce > /dev/null 2>&1; then
+            echo "Waiting for ecom-core-api deployment..."
+            kubectl wait --for=condition=available --timeout=600s deployment/ecom-core-api -n ecommerce || {
+              echo "Core API deployment failed. Getting logs..."
+              kubectl get pods -n ecommerce -l app=ecom-core-api
+              kubectl describe pods -n ecommerce -l app=ecom-core-api
+              kubectl logs -n ecommerce -l app=ecom-core-api --tail=50 || echo "No logs available"
+              exit 1
+            }
+          else
+            echo "ecom-core-api deployment not found!"
+            exit 1
+          fi
+          
+          if kubectl get deployment ecom-users-api -n ecommerce > /dev/null 2>&1; then
+            echo "Waiting for ecom-users-api deployment..."
+            kubectl wait --for=condition=available --timeout=600s deployment/ecom-users-api -n ecommerce || {
+              echo "Users API deployment failed. Getting logs..."
+              kubectl get pods -n ecommerce -l app=ecom-users-api
+              kubectl describe pods -n ecommerce -l app=ecom-users-api
+              kubectl logs -n ecommerce -l app=ecom-users-api --tail=50 || echo "No logs available"
+              exit 1
+            }
+          else
+            echo "ecom-users-api deployment not found!"
+            exit 1
+          fi
+          
+          echo "Final status check..."
           kubectl get pods -n ecommerce
           kubectl get services -n ecommerce
           
       - name: Wait for monitoring stack
         run: |
           echo "Waiting for monitoring deployments..."
-          kubectl wait --for=condition=available --timeout=300s deployment/prometheus -n ecommerce || echo "Prometheus deployment timeout (may still be starting)"
-          kubectl wait --for=condition=available --timeout=300s deployment/grafana -n ecommerce || echo "Grafana deployment timeout (may still be starting)"
+          kubectl wait --for=condition=available --timeout=600s deployment/prometheus -n ecommerce || echo "Prometheus deployment timeout (may still be starting)"
+          kubectl wait --for=condition=available --timeout=600s deployment/grafana -n ecommerce || echo "Grafana deployment timeout (may still be starting)"
           kubectl get pods -n ecommerce -l app=prometheus
           kubectl get pods -n ecommerce -l app=grafana
 
