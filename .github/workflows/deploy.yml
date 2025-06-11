@@ -7,104 +7,70 @@ on:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
-    
+
     steps:
+      # 1) Pre-clean the entire repo directory (including root-owned bits)
+      - name: Pre-clean workspace
+        run: |
+          echo "🚧 Removing stale workspace…"
+          sudo rm -rf "${{ runner.workspace }}/${{ github.repository }}" || true
+
+      # 2) Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
         with:
           clean: true
-       
+
+      # 3) Fix any lingering permission issues
       - name: Fix workspace permissions
         run: |
-          echo "Fixing workspace permissions..."
-          
-          # Fix any permission issues in the workspace
-          sudo chown -R $(whoami):$(whoami) $GITHUB_WORKSPACE || true
-          sudo chmod -R 755 $GITHUB_WORKSPACE || true
-          
-          # Remove any Docker volume mounts that might be causing issues
-          if [ -d "$GITHUB_WORKSPACE/monitoring" ]; then
-            sudo rm -rf $GITHUB_WORKSPACE/monitoring || true
-          fi
-          
-          # Clean up any existing grafana data
-          docker volume ls | grep grafana | awk '{print $2}' | xargs -r docker volume rm --force || true
-          docker volume ls | grep prometheus | awk '{print $2}' | xargs -r docker volume rm --force || true
+          echo "🔧 Fixing permissions…"
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+          sudo chmod -R 755 "$GITHUB_WORKSPACE" || true
 
-      - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          clean: true
-
+      # 4) Setup .NET (install if missing)
       - name: Setup .NET with proper permissions
         run: |
-          echo "Setting up .NET for self-hosted runner..."
-          
-          # Check if .NET is already installed
+          echo "Setting up .NET for self-hosted runner…"
           if command -v dotnet &> /dev/null; then
-            echo ".NET is already installed:"
+            echo ".NET already installed:"
             dotnet --version
             dotnet --list-sdks
           else
-            echo "Installing .NET manually..."
-            
-            # Create local dotnet directory
-            mkdir -p $HOME/.dotnet
-            export DOTNET_ROOT=$HOME/.dotnet
-            export PATH=$DOTNET_ROOT:$PATH
-            
-            # Download and install .NET
-            curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir $HOME/.dotnet
-            
-            # Add to PATH for subsequent steps
-            echo "DOTNET_ROOT=$HOME/.dotnet" >> $GITHUB_ENV
-            echo "$HOME/.dotnet" >> $GITHUB_PATH
-            
-            echo "Verifying installation:"
-            $HOME/.dotnet/dotnet --version
+            echo "Installing .NET…"
+            mkdir -p "$HOME/.dotnet"
+            export DOTNET_ROOT="$HOME/.dotnet"
+            export PATH="$DOTNET_ROOT:$PATH"
+            curl -sSL https://dot.net/v1/dotnet-install.sh \
+              | bash /dev/stdin --channel 9.0 --install-dir "$HOME/.dotnet"
+            echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
+            echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+            echo "Installed .NET version:"
+            "$HOME/.dotnet/dotnet" --version
           fi
 
-      - name: Comprehensive cleanup of existing containers
+      # 5) Clean up existing Docker containers, volumes, ports
+      - name: Comprehensive cleanup of existing containers and ports
         run: |
-          echo "Comprehensive cleanup of existing containers and ports..."
-          
-          # Stop and remove all containers from this project
+          echo "🧹 Cleaning up Docker…"
           docker compose down --remove-orphans || true
           docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
-          
-          # Remove any volumes that might be causing permission issues
-          docker volume ls | grep -E "(grafana|prometheus)" | awk '{print $2}' | xargs -r docker volume rm --force || true
-          
-          # Stop and remove any containers using our target ports
-          echo "Stopping containers using target ports..."
-          docker ps --format "table {{.ID}}\t{{.Ports}}" | grep -E "(5301|5302|9090|3000)" | awk '{print $1}' | xargs -r docker stop || true
-          docker ps -a --format "table {{.ID}}\t{{.Ports}}" | grep -E "(5301|5302|9090|3000)" | awk '{print $1}' | xargs -r docker rm || true
-          
-          # Stop specific containers by name patterns
-          docker ps -a --format "table {{.Names}}" | grep -E "(prometheus|grafana|ecom)" | xargs -r docker rm -f || true
-          
-          # Kill any processes using our ports (be more specific)
-          echo "Freeing up ports..."
+          docker volume ls \
+            | grep -E "(grafana|prometheus)" \
+            | awk '{print $2}' \
+            | xargs -r docker volume rm --force || true
+          # stop/remove containers on our ports
           for port in 5301 5302 9090 3000 5401 5402 9091 3001; do
-            if sudo lsof -ti:$port >/dev/null 2>&1; then
-              echo "Killing processes on port $port"
-              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
-            fi
+            sudo lsof -ti:"$port" \
+              | xargs -r sudo kill -9 || true
           done
-          
-          # Clean up Docker system
           docker system prune -f || true
-          
-          echo "Cleanup completed"
 
+      # 6) Create monitoring config directory & prometheus.yml
       - name: Create monitoring configuration
         run: |
-          echo "Creating monitoring configuration files..."
-          
-          # Create monitoring directory structure
+          echo "⚙️  Writing Prometheus config…"
           mkdir -p monitoring
-          
-          # Create prometheus configuration
           cat > monitoring/prometheus.yml << 'EOF'
           global:
             scrape_interval: 15s
@@ -129,471 +95,174 @@ jobs:
               metrics_path: '/metrics'
               scrape_interval: 30s
           EOF
-          
-          # Set proper permissions
           chmod 644 monitoring/prometheus.yml
 
+      # 7) Enable Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
         with:
           driver-opts: |
             network=host
 
+      # 8) Build & test via Docker Compose in CI mode
       - name: Build and test with Docker Compose (CI Environment)
         run: |
-          echo "Building services with Docker Compose for CI testing..."
-          
-          # Find available ports for CI
-          CI_CORE_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
-          CI_USERS_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
-          CI_PROMETHEUS_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
-          CI_GRAFANA_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
-          
-          echo "Using CI ports: Core=$CI_CORE_PORT, Users=$CI_USERS_PORT, Prometheus=$CI_PROMETHEUS_PORT, Grafana=$CI_GRAFANA_PORT"
-          
-          # Create a CI-specific docker-compose override with dynamic ports
+          echo "🔨 Building services (CI)…"
+          CI_CORE_PORT=$(python3 - <<<'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+          CI_USERS_PORT=$(python3 - <<<'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+          CI_PROM_PORT=$(python3 - <<<'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+          CI_GF_PORT=$(python3 - <<<'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
           cat > docker-compose.ci.yml << EOF
           version: '3.8'
           services:
             ecom.core.api:
-              ports:
-                - "$CI_CORE_PORT:8080"
               build:
                 context: .
                 dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
                 args:
                   BUILDKIT_INLINE_CACHE: 1
-            ecom.users.api:
               ports:
-                - "$CI_USERS_PORT:8080"
+                - "$CI_CORE_PORT:8080"
+            ecom.users.api:
               build:
                 context: .
                 dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
                 args:
                   BUILDKIT_INLINE_CACHE: 1
-            prometheus:
               ports:
-                - "$CI_PROMETHEUS_PORT:9090"
+                - "$CI_USERS_PORT:8080"
+            prometheus:
+              image: prom/prometheus
               volumes:
                 - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-            grafana:
               ports:
-                - "$CI_GRAFANA_PORT:3000"
+                - "$CI_PROM_PORT:9090"
+            grafana:
+              image: grafana/grafana
               environment:
                 - GF_SECURITY_ADMIN_PASSWORD=admin123
                 - GF_USERS_ALLOW_SIGN_UP=false
-                - GF_INSTALL_PLUGINS=
+              ports:
+                - "$CI_GF_PORT:3000"
           EOF
-          
-          # Retry mechanism for Docker build
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          BUILD_SUCCESS=false
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$BUILD_SUCCESS" = false ]; do
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Build attempt $RETRY_COUNT of $MAX_RETRIES..."
-            
-            # Clean up any partial builds
-            docker system prune -f || true
-            
-            # Try building with different strategies
-            if [ $RETRY_COUNT -eq 1 ]; then
-              echo "Attempting normal build..."
-              if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache; then
-                BUILD_SUCCESS=true
-              fi
-            elif [ $RETRY_COUNT -eq 2 ]; then
-              echo "Attempting build with legacy builder..."
-              export DOCKER_BUILDKIT=0
-              if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache; then
-                BUILD_SUCCESS=true
-              fi
-              export DOCKER_BUILDKIT=1
-            else
-              echo "Attempting build one service at a time..."
-              if docker compose -f docker-compose.yml -f docker-compose.ci.yml build prometheus grafana && \
-                 docker compose -f docker-compose.yml -f docker-compose.ci.yml build ecom.core.api && \
-                 docker compose -f docker-compose.yml -f docker-compose.ci.yml build ecom.users.api; then
-                BUILD_SUCCESS=true
-              fi
-            fi
-            
-            if [ "$BUILD_SUCCESS" = false ]; then
-              echo "Build attempt $RETRY_COUNT failed. Waiting 10 seconds before retry..."
-              sleep 10
-            fi
-          done
-          
-          if [ "$BUILD_SUCCESS" = false ]; then
-            echo "All build attempts failed. Trying manual dotnet restore..."
-            
-            # Manual .NET restore as fallback
-            if command -v dotnet >/dev/null 2>&1; then
-              echo "Performing manual dotnet restore..."
-              dotnet restore Ecom.Core/src/Ecom.Core.API/Ecom.Core.API.csproj --verbosity detailed || true
-              dotnet restore Ecom.Users/src/Ecom.Users.API/Ecom.Users.API.csproj --verbosity detailed || true
-              
-              # Try build again after manual restore
-              docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache || {
-                echo "Build failed even after manual restore. Continuing with Kubernetes-only deployment..."
-                return 0
-              }
-            else
-              echo "dotnet CLI not available. Continuing with Kubernetes-only deployment..."
-              return 0
-            fi
-          fi
-          
-          echo "Build successful. Starting services..."
-          
-          # Start services in detached mode
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
-          
-          echo "Waiting for services to start..."
-          sleep 30
-          
-          # Test services on CI ports
-          echo "Testing Core API on CI port $CI_CORE_PORT..."
-          curl -f http://localhost:$CI_CORE_PORT/health || curl -f http://localhost:$CI_CORE_PORT/ || echo "Core API not responding"
-          
-          echo "Testing Users API on CI port $CI_USERS_PORT..."
-          curl -f http://localhost:$CI_USERS_PORT/health || curl -f http://localhost:$CI_USERS_PORT/ || echo "Users API not responding"
-          
-          echo "Testing Prometheus on CI port $CI_PROMETHEUS_PORT..."
-          curl -f http://localhost:$CI_PROMETHEUS_PORT/ || echo "Prometheus not responding"
-          
-          # Stop Docker Compose services
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml down
-          
-          echo "Docker Compose build and test completed successfully"
 
+          MAX_RETRIES=3; COUNT=0; SUCCESS=false
+          until $SUCCESS || [ $COUNT -ge $MAX_RETRIES ]; do
+            COUNT=$((COUNT+1))
+            echo "Attempt $COUNT of $MAX_RETRIES"
+            docker system prune -f || true
+            if docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache; then
+              SUCCESS=true
+            elif [ $COUNT -eq 2 ]; then
+              export DOCKER_BUILDKIT=0
+            fi
+            sleep 5
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "Build failed after retries; running manual dotnet restore"
+            dotnet restore Ecom.Core/src/Ecom.Core.API/Ecom.Core.API.csproj --verbosity detailed || true
+            dotnet restore Ecom.Users/src/Ecom.Users.API/Ecom.Users.API.csproj --verbosity detailed || true
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache || true
+          fi
+
+          echo "✅ Build done; spinning up"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+          sleep 20
+          curl -f http://localhost:$CI_CORE_PORT/health || true
+          curl -f http://localhost:$CI_USERS_PORT/health || true
+          curl -f http://localhost:$CI_PROM_PORT || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down
+
+      # 9) Build individual images for Kubernetes
       - name: Build individual images for Kubernetes
         run: |
-          echo "Building individual Docker images for Kubernetes deployment..."
-          
-          # Function to build with retry
+          echo "🐳 Building core API image…"
           build_with_retry() {
-            local dockerfile=$1
-            local tag=$2
-            local max_retries=3
-            local retry_count=0
-            
-            while [ $retry_count -lt $max_retries ]; do
-              retry_count=$((retry_count + 1))
-              echo "Building $tag (attempt $retry_count/$max_retries)..."
-              
-              if [ $retry_count -eq 1 ]; then
-                # First attempt with BuildKit
-                if docker buildx build \
-                  --file "$dockerfile" \
-                  --tag "$tag" \
-                  --load \
-                  --progress=plain \
-                  .; then
-                  return 0
-                fi
-              elif [ $retry_count -eq 2 ]; then
-                # Second attempt without BuildKit
-                export DOCKER_BUILDKIT=0
-                if docker build \
-                  --file "$dockerfile" \
-                  --tag "$tag" \
-                  .; then
-                  export DOCKER_BUILDKIT=1
-                  return 0
-                fi
-                export DOCKER_BUILDKIT=1
-              else
-                # Third attempt with simplified build
-                if docker build \
-                  --file "$dockerfile" \
-                  --tag "$tag" \
-                  --no-cache \
-                  .; then
-                  return 0
-                fi
-              fi
-              
-              echo "Build attempt $retry_count failed for $tag"
+            df=$1; tag=$2; for i in 1 2 3; do
+              echo "Try $i for $tag"
+              if [ $i -eq 2 ]; then export DOCKER_BUILDKIT=0; fi
+              docker buildx build --file "$df" --tag "$tag" --load --progress=plain . && return 0
               sleep 5
             done
-            
-            echo "All build attempts failed for $tag"
-            return 1
+            echo "Failed $tag"
           }
-          
-          # Build Core API with retry
-          if build_with_retry "Ecom.Core/src/Ecom.Core.API/Dockerfile" "moclaw/ecom-core-api:latest"; then
-            echo "Core API build successful"
-          else
-            echo "Core API build failed - will use existing image if available"
-          fi
-          
-          # Build Users API with retry
-          if build_with_retry "Ecom.Users/src/Ecom.Users.API/Dockerfile" "moclaw/ecom-users-api:latest"; then
-            echo "Users API build successful"
-          else
-            echo "Users API build failed - will use existing image if available"
-          fi
-          
-          echo "Verifying built images..."
-          docker images | grep moclaw || echo "No moclaw images found - deployment may fail"
+          build_with_retry "Ecom.Core/src/Ecom.Core.API/Dockerfile" "moclaw/ecom-core-api:latest"
+          build_with_retry "Ecom.Users/src/Ecom.Users.API/Dockerfile" "moclaw/ecom-users-api:latest"
+          docker images | grep moclaw || echo "⚠️ No moclaw images"
 
+      # 10) Setup Minikube
       - name: Set up Minikube
         uses: medyagh/setup-minikube@latest
         with:
           driver: docker
           container-runtime: docker
-          
+
+      # 11) Load images into Minikube
       - name: Load images to Minikube
         run: |
-          echo "Loading images to Minikube..."
-          
+          echo "🔄 Loading images…"
           minikube image load moclaw/ecom-core-api:latest
           minikube image load moclaw/ecom-users-api:latest
-          
-          echo "Verifying images in Minikube..."
           minikube image ls | grep moclaw
 
+      # 12) Deploy to Kubernetes (Minikube)
       - name: Deploy to Minikube
         run: |
-          echo "Deploying to Kubernetes..."
-          
+          echo "🚀 Applying manifests…"
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/core-deployment.yaml
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
-          
-          echo "Initial deployment status check..."
-          kubectl get pods -n ecommerce
-          kubectl get deployments -n ecommerce
-          
-          echo "Waiting 30 seconds for initial pod creation..."
-          sleep 30
-          
-          # Check for common issues before waiting
-          echo "Checking for pod issues..."
-          kubectl get pods -n ecommerce -o wide
-          
-          # Check if pods are stuck in ImagePullBackOff
-          FAILING_PODS=$(kubectl get pods -n ecommerce --field-selector=status.phase!=Running,status.phase!=Succeeded -o jsonpath='{.items[*].metadata.name}')
-          
-          if [ ! -z "$FAILING_PODS" ]; then
-            echo "Found problematic pods: $FAILING_PODS"
-            
-            for pod in $FAILING_PODS; do
-              echo "=== Diagnosing pod: $pod ==="
-              kubectl describe pod $pod -n ecommerce
-              
-              # Check if it's an image pull issue
-              POD_STATUS=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "unknown")
-              echo "Pod $pod status: $POD_STATUS"
-              
-              if [[ "$POD_STATUS" == *"ImagePull"* ]] || [[ "$POD_STATUS" == *"ErrImage"* ]]; then
-                echo "Pod $pod has image pull issues. Checking if image exists in Minikube..."
-                
-                # Get the image name from the pod
-                IMAGE_NAME=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.spec.containers[0].image}')
-                echo "Image: $IMAGE_NAME"
-                
-                # Check if image exists in Minikube
-                if minikube image ls | grep -q "$IMAGE_NAME"; then
-                  echo "Image $IMAGE_NAME exists in Minikube"
-                  
-                  # Force restart the deployment
-                  DEPLOYMENT=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.metadata.labels.app}')
-                  if [ ! -z "$DEPLOYMENT" ]; then
-                    echo "Restarting deployment $DEPLOYMENT..."
-                    kubectl rollout restart deployment/$DEPLOYMENT -n ecommerce
-                  fi
-                else
-                  echo "Image $IMAGE_NAME NOT found in Minikube. Loading image..."
-                  
-                  # Try to load the image
-                  if [[ "$IMAGE_NAME" == *"ecom-core-api"* ]]; then
-                    minikube image load moclaw/ecom-core-api:latest
-                  elif [[ "$IMAGE_NAME" == *"ecom-users-api"* ]]; then
-                    minikube image load moclaw/ecom-users-api:latest
-                  fi
-                  
-                  # Restart deployment after loading image
-                  DEPLOYMENT=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.metadata.labels.app}')
-                  if [ ! -z "$DEPLOYMENT" ]; then
-                    echo "Restarting deployment $DEPLOYMENT after image load..."
-                    kubectl rollout restart deployment/$DEPLOYMENT -n ecommerce
-                  fi
-                fi
-              fi
-            done
-            
-            echo "Waiting additional 60 seconds after fixes..."
-            sleep 60
-          fi
-          
-          # Try waiting for deployments with shorter timeout and better error handling
-          echo "Waiting for Core API deployment..."
-          if ! kubectl wait --for=condition=available --timeout=120s deployment/ecom-core-api -n ecommerce; then
-            echo "Core API deployment failed to become available. Getting detailed status..."
-            
-            kubectl get deployment ecom-core-api -n ecommerce -o yaml
-            kubectl describe deployment ecom-core-api -n ecommerce
-            kubectl get pods -n ecommerce -l app=ecom-core-api
-            
-            # Get logs from any core API pods
-            CORE_PODS=$(kubectl get pods -n ecommerce -l app=ecom-core-api -o jsonpath='{.items[*].metadata.name}')
-            for pod in $CORE_PODS; do
-              echo "=== Logs for $pod ==="
-              kubectl logs $pod -n ecommerce --tail=50 || echo "No logs available for $pod"
-            done
-          else
-            echo "Core API deployment is ready!"
-          fi
-          
-          echo "Waiting for Users API deployment..."
-          if ! kubectl wait --for=condition=available --timeout=120s deployment/ecom-users-api -n ecommerce; then
-            echo "Users API deployment failed to become available. Getting detailed status..."
-            
-            kubectl get deployment ecom-users-api -n ecommerce -o yaml
-            kubectl describe deployment ecom-users-api -n ecommerce
-            kubectl get pods -n ecommerce -l app=ecom-users-api
-            
-            # Get logs from any users API pods
-            USERS_PODS=$(kubectl get pods -n ecommerce -l app=ecom-users-api -o jsonpath='{.items[*].metadata.name}')
-            for pod in $USERS_PODS; do
-              echo "=== Logs for $pod ==="
-              kubectl logs $pod -n ecommerce --tail=50 || echo "No logs available for $pod"
-            done
-          else
-            echo "Users API deployment is ready!"
-          fi
-          
-          echo "Final deployment status:"
-          kubectl get pods -n ecommerce -o wide
-          kubectl get deployments -n ecommerce
-          kubectl get services -n ecommerce
+          sleep 20
+          kubectl get pods,deploy,svc -n ecommerce -o wide
 
+      # 13) Force deployment recovery if needed
       - name: Force deployment recovery if needed
         run: |
-          echo "Checking if deployments need recovery..."
-          
-          # Check if any deployments are not ready
-          NOT_READY_DEPLOYMENTS=$(kubectl get deployments -n ecommerce -o jsonpath='{range .items[?(@.status.readyReplicas!=1)]}{.metadata.name}{"\n"}{end}')
-          
-          if [ ! -z "$NOT_READY_DEPLOYMENTS" ]; then
-            echo "Found deployments that are not ready: $NOT_READY_DEPLOYMENTS"
-            
-            for deployment in $NOT_READY_DEPLOYMENTS; do
-              echo "=== Attempting recovery for $deployment ==="
-              
-              # Scale down and up
-              echo "Scaling down $deployment..."
-              kubectl scale deployment $deployment --replicas=0 -n ecommerce
+          NEED_RECOVERY=$(kubectl get deploy -n ecommerce \
+            -o jsonpath='{.items[?(@.status.readyReplicas!=1)].metadata.name}')
+          if [ -n "$NEED_RECOVERY" ]; then
+            for d in $NEED_RECOVERY; do
+              echo "Recovering $d"
+              kubectl scale deployment "$d" --replicas=0 -n ecommerce
+              sleep 5
+              kubectl scale deployment "$d" --replicas=1 -n ecommerce
               sleep 10
-              
-              echo "Scaling up $deployment..."
-              kubectl scale deployment $deployment --replicas=1 -n ecommerce
-              sleep 20
-              
-              # Check if pods are running now
-              kubectl get pods -n ecommerce -l app=$deployment
             done
-            
-            # Wait a bit more after recovery attempts
-            echo "Waiting 30 seconds after recovery attempts..."
-            sleep 30
-            
-            # Final check
-            echo "Post-recovery status:"
-            kubectl get deployments -n ecommerce
-            kubectl get pods -n ecommerce
-          else
-            echo "All deployments appear to be ready"
           fi
 
+      # 14) Conditional production deployment
       - name: Conditional production deployment
         run: |
-          echo "Checking if production ports are available..."
-          
-          # Check if production ports are free
-          PORTS_AVAILABLE=true
-          for port in 5301 5302 9090 3000; do
-            if sudo lsof -ti:$port >/dev/null 2>&1; then
-              echo "Port $port is already in use"
-              PORTS_AVAILABLE=false
-            fi
+          PORTS_OK=true
+          for p in 5301 5302 9090 3000; do
+            sudo lsof -ti:"$p" && PORTS_OK=false
           done
-          
-          if [ "$PORTS_AVAILABLE" = true ]; then
-            echo "Deploying production environment..."
-            
-            # Try production deployment with retry
-            MAX_RETRIES=2
-            RETRY_COUNT=0
-            DEPLOY_SUCCESS=false
-            
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DEPLOY_SUCCESS" = false ]; do
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "Production deployment attempt $RETRY_COUNT..."
-              
-              if docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d; then
-                DEPLOY_SUCCESS=true
-              else
-                echo "Production deployment attempt $RETRY_COUNT failed"
-                docker compose -f docker-compose.yml -f docker-compose.prod.yml down || true
-                sleep 10
-              fi
-            done
-            
-            if [ "$DEPLOY_SUCCESS" = true ]; then
-              echo "Waiting for production services..."
-              sleep 30
-              
-              # Test production services
-              echo "Testing Production Core API on port 5301..."
-              curl -f http://localhost:5301/health || curl -f http://localhost:5301/ || echo "Production Core API not responding"
-              
-              echo "Testing Production Users API on port 5302..."
-              curl -f http://localhost:5302/health || curl -f http://localhost:5302/ || echo "Production Users API not responding"
-              
-              echo "Testing Production Prometheus on port 9090..."
-              curl -f http://localhost:9090/ || echo "Production Prometheus not responding"
-              
-              echo "Testing Production Grafana on port 3000..."
-              curl -f http://localhost:3000/ || echo "Production Grafana not responding"
-            else
-              echo "Production deployment failed after retries"
-            fi
+          if [ "$PORTS_OK" = true ]; then
+            echo "📦 Deploying prod compose…" 
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            sleep 20
+            curl -f http://localhost:5301/health || true
+            curl -f http://localhost:5302/health || true
+            curl -f http://localhost:9090 || true
+            curl -f http://localhost:3000 || true
           else
-            echo "Production ports are occupied. Skipping production deployment."
-            echo "Please manually stop existing services on ports 5301, 5302, 9090, 3000 if you want to deploy production environment."
+            echo "⚠️ Ports busy; skipping prod compose"
           fi
 
+      # 15) Display deployment summary
       - name: Display deployment summary
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
-          
-          # Check if production is running
-          if docker compose ps | grep -q "Up"; then
-            echo "Production Docker Compose Services (RUNNING):"
-            echo "- Core API: http://localhost:5301"
-            echo "- Users API: http://localhost:5302"
-            echo "- Prometheus: http://localhost:9090"
-            echo "- Grafana: http://localhost:3000 (admin/admin123)"
+          if docker compose ps | grep -q Up; then
+            echo "Compose services running on ports 5301,5302,9090,3000"
           else
-            echo "Production Docker Compose Services: NOT RUNNING (ports may be occupied)"
+            echo "Compose not running"
           fi
-          echo ""
-          
-          MINIKUBE_IP=$(minikube ip)
-          echo "Kubernetes Services (External):"
-          echo "- Core API: http://$MINIKUBE_IP:30301"
-          echo "- Users API: http://$MINIKUBE_IP:30302"
-          echo ""
-          echo "Kubernetes Cluster Status:"
-          kubectl get pods -n ecommerce
-          kubectl get services -n ecommerce
-          echo ""
-          echo "Current Docker Containers:"
+          IP=$(minikube ip)
+          echo "Minikube services:"
+          kubectl get svc -n ecommerce -o wide
+          echo "Current Docker containers:"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
