@@ -1,10 +1,18 @@
-name: CI/CD for Docker Compose and Minikube
+name: CI/CD Pipeline - Ecommerce Platform
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: ['staging', 'production']
 
 env:
   DOTNET_VERSION: '9.0'
@@ -13,166 +21,393 @@ env:
   REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
   IMAGE_CORE: moclaw/ecom-core-api
   IMAGE_USERS: moclaw/ecom-users-api
+  KUBE_NAMESPACE: ecommerce
+  MONITORING_NAMESPACE: monitoring
 
 jobs:
-  build-and-deploy:
+  build-and-test:
+    name: Build & Test
     runs-on: self-hosted
-    services:
-      docker:
-        image: docker:20.10-dind
-        options: --privileged
-
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      core-image: ${{ steps.meta.outputs.core-image }}
+      users-image: ${{ steps.meta.outputs.users-image }}
+    
     steps:
-      - name: Pre-clean workspace
+      - name: 🧹 Pre-clean workspace
         run: |
-          echo "🧹 Cleaning workspace..."
-          docker stop $(docker ps -aq) 2>/dev/null || true
-          docker rm $(docker ps -aq) 2>/dev/null || true
-          docker system prune -f || true
-          rm -rf ./monitoring 2>/dev/null || true
-          for port in 5301 5302 9090 3000; do
-            lsof -ti:$port | xargs -r kill -9 2>/dev/null || true
-          done
+          echo "Cleaning workspace and stopping services..."
+          docker system prune -af --volumes || true
+          sudo pkill -f "dotnet\|docker-compose" || true
+          sudo fuser -k 5301/tcp 5302/tcp 9090/tcp 3000/tcp || true
+          rm -rf ./monitoring ./bin ./obj || true
 
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v3
+      - name: 🔧 Setup .NET SDK
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore & Build & Test
-        run: |
-          dotnet restore
-          dotnet build --configuration Release --no-restore
-          dotnet test --configuration Release --no-build
+      - name: 📦 Cache NuGet packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
 
-      - name: Login to Docker registry
-        uses: docker/login-action@v2
+      - name: 🔨 Restore dependencies
+        run: |
+          echo "Restoring NuGet packages..."
+          dotnet restore --verbosity normal
+
+      - name: 🏗️ Build solution
+        run: |
+          echo "Building solution in Release mode..."
+          dotnet build --configuration Release --no-restore --verbosity normal
+
+      - name: 🧪 Run tests
+        run: |
+          echo "Running unit tests..."
+          dotnet test --configuration Release --no-build --verbosity normal \
+            --logger trx --results-directory ./TestResults/ \
+            --collect:"XPlat Code Coverage"
+
+      - name: 📊 Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: .NET Tests
+          path: '**/*.trx'
+          reporter: dotnet-trx
+
+      - name: 🏷️ Generate metadata
+        id: meta
+        run: |
+          TAG="${{ github.sha }}"
+          echo "tags=${TAG}" >> $GITHUB_OUTPUT
+          echo "core-image=${{ env.IMAGE_CORE }}:${TAG}" >> $GITHUB_OUTPUT
+          echo "users-image=${{ env.IMAGE_USERS }}:${TAG}" >> $GITHUB_OUTPUT
+
+  build-images:
+    name: Build Docker Images
+    runs-on: self-hosted
+    needs: build-and-test
+    strategy:
+      matrix:
+        service:
+          - name: core-api
+            dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
+            image: ${{ needs.build-and-test.outputs.core-image }}
+          - name: users-api
+            dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
+            image: ${{ needs.build-and-test.outputs.users-image }}
+      fail-fast: false
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Login to Docker registry
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_URL }}
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      - name: Build Docker images
+      - name: 🏗️ Build and push ${{ matrix.service.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: ${{ matrix.service.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: self-hosted
+    needs: [build-and-test, build-images]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup monitoring configs
         run: |
-          echo "🐳 Building images..."
-          build_image() {
-            local dockerfile=$1
-            local tag=$2
-            local max_attempts=3
-            local attempt=1
-
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts for $tag"
-              docker system prune -f || true
-              if [ $attempt -eq 1 ]; then
-                DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
-              elif [ $attempt -eq 2 ]; then
-                DOCKER_BUILDKIT=0 docker build -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
-              else
-                DOCKER_BUILDKIT=0 docker build --no-cache -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
-              fi && return 0
-
-              echo "Build attempt $attempt failed"
-              attempt=$((attempt+1))
-              sleep 10
-            done
-
-            echo "❌ Failed to build $tag"
-            return 1
-          }
-
-          build_image "Ecom.Core/src/Ecom.Core.API/Dockerfile" "${{ env.IMAGE_CORE }}"
-          build_image "Ecom.Users/src/Ecom.Users.API/Dockerfile" "${{ env.IMAGE_USERS }}"
-
-      - name: Create monitoring configuration
-        run: |
-          echo "⚙️ Creating monitoring config..."
-          mkdir -p monitoring/dashboards
-          cat > monitoring/prometheus.yml << 'EOF'
+          echo "Creating monitoring configurations..."
+          mkdir -p monitoring/{configs,dashboards}
+          
+          # Prometheus configuration
+          cat > monitoring/configs/prometheus.yml << 'EOF'
           global:
             scrape_interval: 15s
+            evaluation_interval: 15s
+          
+          rule_files:
+            - "alert_rules.yml"
+          
           scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            
             - job_name: 'core-api'
               static_configs:
                 - targets: ['core-api-service:5301']
               metrics_path: '/metrics'
+              scrape_interval: 10s
+            
             - job_name: 'users-api'
               static_configs:
                 - targets: ['users-api-service:5302']
               metrics_path: '/metrics'
+              scrape_interval: 10s
+          
+          alerting:
+            alertmanagers:
+              - static_configs:
+                  - targets: ['alertmanager:9093']
           EOF
-          cat > monitoring/dashboards/ecommerce-api.json << 'EOF'
+          
+          # Grafana dashboard
+          cat > monitoring/dashboards/api-dashboard.json << 'EOF'
           {
             "dashboard": {
-              "title": "Ecommerce API Metrics",
+              "id": null,
+              "title": "Ecommerce API Dashboard",
+              "tags": ["ecommerce", "api"],
+              "timezone": "browser",
               "panels": [
                 {
-                  "title": "HTTP Requests Rate",
-                  "type": "graph",
-                  "targets": [{"expr": "rate(http_requests_total[5m])"}],
+                  "id": 1,
+                  "title": "HTTP Request Rate",
+                  "type": "stat",
+                  "targets": [
+                    {
+                      "expr": "sum(rate(http_requests_total[5m])) by (service)",
+                      "legendFormat": "{{service}}"
+                    }
+                  ],
                   "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+                },
+                {
+                  "id": 2,
+                  "title": "Response Time (95th percentile)",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+                      "legendFormat": "95th percentile"
+                    }
+                  ],
+                  "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+                },
+                {
+                  "id": 3,
+                  "title": "Error Rate",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "sum(rate(http_requests_total{status=~\"4..|5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
+                      "legendFormat": "Error Rate"
+                    }
+                  ],
+                  "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
                 }
               ],
-              "time": {"from": "now-1h", "to": "now"}
+              "time": {
+                "from": "now-1h",
+                "to": "now"
+              },
+              "refresh": "5s"
             }
           }
           EOF
 
-      - name: Setup Minikube
+      - name: 🚀 Setup Minikube
         uses: medyagh/setup-minikube@latest
         with:
+          minikube-version: 'latest'
           driver: docker
-          kubernetes-version: 'v1.33.1'
-          memory: 4096
-          cpus: 2
+          kubernetes-version: 'v1.28.3'
+          memory: 6144
+          cpus: 4
           start: false
 
-      - name: Start Minikube
+      - name: ▶️ Start Minikube cluster
         run: |
-          echo "🚀 Starting Minikube..."
+          echo "Starting Minikube cluster..."
           minikube delete || true
-          minikube start --driver=docker --kubernetes-version=v1.33.1 --memory=4096 --cpus=2 --wait=all
-          minikube addons disable storage-provisioner || true
-          minikube addons disable default-storageclass || true
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
-
-      - name: Load images to Minikube
-        run: |
-          echo "🔄 Loading images..."
-          minikube image load "${{ env.IMAGE_CORE }}:${{ github.sha }}"
-          minikube image load "${{ env.IMAGE_USERS }}:${{ github.sha }}"
-
-      - name: Deploy Kubernetes manifests
-        run: |
-          echo "🚀 Deploying to Kubernetes..."
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/
-          kubectl set image deployment/core-api core-api="${{ env.IMAGE_CORE }}:${{ github.sha }}" -n ecommerce
-          kubectl set image deployment/users-api users-api="${{ env.IMAGE_USERS }}:${{ github.sha }}" -n ecommerce
+          minikube start \
+            --driver=docker \
+            --kubernetes-version=v1.28.3 \
+            --memory=6144 \
+            --cpus=4 \
+            --disk-size=20g \
+            --wait=all
           
-          kubectl create configmap prometheus-config --from-file=monitoring/prometheus.yml -n monitoring --dry-run=client -o yaml | kubectl apply -f -
-          kubectl rollout status deployment/core-api -n ecommerce --timeout=300s
-          kubectl rollout status deployment/users-api -n ecommerce --timeout=300s
+          # Enable addons
+          minikube addons enable ingress
+          minikube addons enable metrics-server
+          
+          # Wait for cluster to be ready
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          kubectl cluster-info
 
-      - name: Deploy production services
+      - name: 🔄 Load Docker images
         run: |
-          echo "📦 Deploying production services..."
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-          echo "Waiting for services..."
-          sleep 20
-          curl -f http://localhost:5301/health && curl -f http://localhost:5302/health
+          echo "Loading images into Minikube..."
+          minikube image load ${{ needs.build-and-test.outputs.core-image }}
+          minikube image load ${{ needs.build-and-test.outputs.users-image }}
+          
+          # Verify images are loaded
+          minikube image ls | grep moclaw
 
-      - name: Display deployment summary
+      - name: 🏗️ Deploy Kubernetes resources
         run: |
-          echo "=== DEPLOYMENT SUMMARY ==="
-          IP=$(minikube ip)
-          echo "Core API: http://localhost:5301"
-          echo "Users API: http://localhost:5302"
-          echo "Prometheus: http://$IP:30090"
-          echo "Grafana: http://$IP:30030 (admin/admin123)"
-          kubectl get svc -n ecommerce
-          kubectl get svc -n monitoring
+          echo "Deploying Kubernetes manifests..."
+          
+          # Create namespaces
+          kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace ${{ env.MONITORING_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Apply base manifests
+          kubectl apply -f k8s/ --recursive
+          
+          # Update image tags
+          kubectl set image deployment/core-api \
+            core-api=${{ needs.build-and-test.outputs.core-image }} \
+            -n ${{ env.KUBE_NAMESPACE }}
+          
+          kubectl set image deployment/users-api \
+            users-api=${{ needs.build-and-test.outputs.users-image }} \
+            -n ${{ env.KUBE_NAMESPACE }}
+          
+          # Create monitoring configs
+          kubectl create configmap prometheus-config \
+            --from-file=monitoring/configs/prometheus.yml \
+            -n ${{ env.MONITORING_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          kubectl create configmap grafana-dashboard \
+            --from-file=monitoring/dashboards/ \
+            -n ${{ env.MONITORING_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: ⏳ Wait for deployments
+        run: |
+          echo "Waiting for deployments to be ready..."
+          kubectl rollout status deployment/core-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
+          kubectl rollout status deployment/users-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
+          
+          # Wait for monitoring stack if exists
+          kubectl rollout status deployment/prometheus -n ${{ env.MONITORING_NAMESPACE }} --timeout=300s || true
+          kubectl rollout status deployment/grafana -n ${{ env.MONITORING_NAMESPACE }} --timeout=300s || true
+
+      - name: 🏃 Start Docker Compose services
+        run: |
+          echo "Starting production services with Docker Compose..."
+          export CORE_IMAGE=${{ needs.build-and-test.outputs.core-image }}
+          export USERS_IMAGE=${{ needs.build-and-test.outputs.users-image }}
+          
+          docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+          
+          # Wait for services to be healthy
+          echo "Waiting for services to start..."
+          sleep 30
+
+      - name: 🩺 Health checks
+        run: |
+          echo "Performing health checks..."
+          
+          # Check Kubernetes services
+          kubectl get pods -n ${{ env.KUBE_NAMESPACE }}
+          kubectl get services -n ${{ env.KUBE_NAMESPACE }}
+          
+          # Check Docker Compose services
+          docker-compose ps
+          
+          # Health endpoint checks
+          max_attempts=10
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Health check attempt $attempt/$max_attempts"
+            
+            if curl -f -s http://localhost:5301/health > /dev/null && \
+               curl -f -s http://localhost:5302/health > /dev/null; then
+              echo "✅ All services are healthy!"
+              break
+            fi
+            
+            if [ $attempt -eq $max_attempts ]; then
+              echo "❌ Health checks failed after $max_attempts attempts"
+              docker-compose logs
+              kubectl logs -l app=core-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
+              kubectl logs -l app=users-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
+              exit 1
+            fi
+            
+            echo "Services not ready yet, waiting..."
+            sleep 15
+            attempt=$((attempt+1))
+          done
+
+      - name: 🧪 Integration tests
+        run: |
+          echo "Running integration tests..."
+          
+          # Basic API tests
+          echo "Testing Core API..."
+          curl -f http://localhost:5301/api/health || exit 1
+          
+          echo "Testing Users API..."
+          curl -f http://localhost:5302/api/health || exit 1
+          
+          echo "✅ Integration tests passed!"
+
+      - name: 📊 Deployment summary
+        run: |
+          echo "==================== DEPLOYMENT SUMMARY ===================="
+          MINIKUBE_IP=$(minikube ip)
+          
+          echo "🌐 Service URLs:"
+          echo "  • Core API (Docker):    http://localhost:5301"
+          echo "  • Users API (Docker):   http://localhost:5302"
+          echo "  • Core API (K8s):       http://$MINIKUBE_IP:30301"
+          echo "  • Users API (K8s):      http://$MINIKUBE_IP:30302"
+          echo "  • Prometheus:           http://$MINIKUBE_IP:30090"
+          echo "  • Grafana:              http://$MINIKUBE_IP:30030"
+          echo ""
+          
+          echo "🐳 Docker Services:"
+          docker-compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+          echo ""
+          
+          echo "☸️ Kubernetes Services:"
+          kubectl get services -n ${{ env.KUBE_NAMESPACE }} -o wide
+          echo ""
+          
+          echo "📊 Resource Usage:"
+          kubectl top nodes || echo "Metrics not available yet"
+          kubectl top pods -n ${{ env.KUBE_NAMESPACE }} || echo "Pod metrics not available yet"
+          echo "==========================================================="
+
+      - name: 🧹 Cleanup on failure
+        if: failure()
+        run: |
+          echo "Cleaning up after failure..."
+          docker-compose down -v || true
+          kubectl delete namespace ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
+          kubectl delete namespace ${{ env.MONITORING_NAMESPACE }} --ignore-not-found=true
+          minikube delete || true
