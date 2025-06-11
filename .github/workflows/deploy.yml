@@ -136,23 +136,24 @@ jobs:
         uses: medyagh/setup-minikube@latest
         with:
           minikube-version: 'latest'
-          driver: docker
+          driver: none
           kubernetes-version: 'v1.28.3'
-          memory: 6144
-          cpus: 4
           start: false
 
       - name: ▶️ Start Minikube cluster
         run: |
           echo "Starting Minikube cluster..."
           minikube delete || true
-          minikube start \
-            --driver=docker \
+          
+          # Start with none driver for self-hosted runners
+          sudo minikube start \
+            --driver=none \
             --kubernetes-version=v1.28.3 \
-            --memory=6144 \
-            --cpus=4 \
-            --disk-size=20g \
-            --wait=all
+            --wait=all \
+            --force
+          
+          # Configure kubectl for current user
+          sudo chown -R $USER:$USER ~/.kube ~/.minikube
           
           # Enable addons
           minikube addons enable ingress
