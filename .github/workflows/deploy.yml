@@ -134,14 +134,16 @@ jobs:
         uses: medyagh/setup-minikube@latest
         with:
           driver: docker
-          kubernetes-version: 'v1.25.13'
+          kubernetes-version: 'v1.33.1'
           memory: '4096'
           cpus: '2'
 
       - name: Start Minikube
         run: |
           echo "🚀 Starting Minikube..."
-          minikube start --driver=docker --kubernetes-version=v1.25.13 --memory=4096 --cpus=2
+          # Delete existing cluster if it exists to avoid version conflicts
+          minikube delete || true
+          minikube start --driver=docker --kubernetes-version=v1.33.1 --memory=4096 --cpus=2
           kubectl get nodes
 
       - name: Load images to Minikube
