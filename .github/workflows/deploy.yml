@@ -38,8 +38,8 @@ jobs:
         run: |
           echo "Cleaning workspace and stopping services..."
           docker system prune -af --volumes || true
-          sudo pkill -f "dotnet\|docker-compose" || true
-          sudo fuser -k 5301/tcp 5302/tcp 9090/tcp 3000/tcp || true
+          pkill -f "dotnet\|docker-compose" || true
+          fuser -k 5301/tcp 5302/tcp 9090/tcp 3000/tcp || true
           rm -rf ./monitoring ./bin ./obj || true
 
       - name: 📥 Checkout repository
