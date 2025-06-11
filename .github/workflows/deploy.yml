@@ -6,13 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options: ['staging', 'production']
 
 env:
   DOTNET_VERSION: '9.0'
