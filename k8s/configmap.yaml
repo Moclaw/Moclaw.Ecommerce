@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ecommerce-config
+  name: core-api-config
   namespace: ecommerce
 data:
   appsettings.json: |
@@ -9,12 +9,30 @@ data:
       "Logging": {
         "LogLevel": {
           "Default": "Information",
-          "Microsoft": "Warning",
-          "Microsoft.Hosting.Lifetime": "Information"
+          "Microsoft.AspNetCore": "Warning"
+        }
+      },
+      "AllowedHosts": "*"
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: users-api-config
+  namespace: ecommerce
+data:
+  appsettings.json: |
+    {
+      "Logging": {
+        "LogLevel": {
+          "Default": "Information",
+          "Microsoft.AspNetCore": "Warning"
         }
       },
       "AllowedHosts": "*",
-      "ConnectionStrings": {
-        "DefaultConnection": "YOUR_CONNECTION_STRING_HERE"
+      "JwtOptions": {
+        "Issuer": "ecom-users-api",
+        "Audience": "ecom-clients",
+        "ExpiryMinutes": 60
       }
     }

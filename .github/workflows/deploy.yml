@@ -132,8 +132,8 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
-  deploy-staging:
-    name: Deploy to Staging
+  deploy-minikube:
+    name: Deploy to Minikube
     runs-on: self-hosted
     needs: [build-and-test, build-images]
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -141,98 +141,6 @@ jobs:
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
-
-      - name: 🔧 Setup monitoring configs
-        run: |
-          echo "Creating monitoring configurations..."
-          mkdir -p monitoring/{configs,dashboards}
-          
-          # Prometheus configuration
-          cat > monitoring/configs/prometheus.yml << 'EOF'
-          global:
-            scrape_interval: 15s
-            evaluation_interval: 15s
-          
-          rule_files:
-            - "alert_rules.yml"
-          
-          scrape_configs:
-            - job_name: 'prometheus'
-              static_configs:
-                - targets: ['localhost:9090']
-            
-            - job_name: 'core-api'
-              static_configs:
-                - targets: ['core-api-service:5301']
-              metrics_path: '/metrics'
-              scrape_interval: 10s
-            
-            - job_name: 'users-api'
-              static_configs:
-                - targets: ['users-api-service:5302']
-              metrics_path: '/metrics'
-              scrape_interval: 10s
-          
-          alerting:
-            alertmanagers:
-              - static_configs:
-                  - targets: ['alertmanager:9093']
-          EOF
-          
-          # Grafana dashboard
-          cat > monitoring/dashboards/api-dashboard.json << 'EOF'
-          {
-            "dashboard": {
-              "id": null,
-              "title": "Ecommerce API Dashboard",
-              "tags": ["ecommerce", "api"],
-              "timezone": "browser",
-              "panels": [
-                {
-                  "id": 1,
-                  "title": "HTTP Request Rate",
-                  "type": "stat",
-                  "targets": [
-                    {
-                      "expr": "sum(rate(http_requests_total[5m])) by (service)",
-                      "legendFormat": "{{service}}"
-                    }
-                  ],
-                  "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
-                },
-                {
-                  "id": 2,
-                  "title": "Response Time (95th percentile)",
-                  "type": "graph",
-                  "targets": [
-                    {
-                      "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
-                      "legendFormat": "95th percentile"
-                    }
-                  ],
-                  "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
-                },
-                {
-                  "id": 3,
-                  "title": "Error Rate",
-                  "type": "graph",
-                  "targets": [
-                    {
-                      "expr": "sum(rate(http_requests_total{status=~\"4..|5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
-                      "legendFormat": "Error Rate"
-                    }
-                  ],
-                  "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
-                }
-              ],
-              "time": {
-                "from": "now-1h",
-                "to": "now"
-              },
-              "refresh": "5s"
-            }
-          }
-          EOF
 
       - name: 🚀 Setup Minikube
         uses: medyagh/setup-minikube@latest
@@ -279,10 +187,17 @@ jobs:
           
           # Create namespaces
           kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create namespace ${{ env.MONITORING_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
           
           # Apply base manifests
-          kubectl apply -f k8s/ --recursive
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/secrets.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/postgres/deployment.yaml
+          kubectl apply -f k8s/core-api/deployment.yaml
+          kubectl apply -f k8s/core-api/service.yaml
+          kubectl apply -f k8s/users-api/deployment.yaml
+          kubectl apply -f k8s/users-api/service.yaml
+          kubectl apply -f k8s/ingress.yaml
           
           # Update image tags
           kubectl set image deployment/core-api \
@@ -292,39 +207,13 @@ jobs:
           kubectl set image deployment/users-api \
             users-api=${{ needs.build-and-test.outputs.users-image }} \
             -n ${{ env.KUBE_NAMESPACE }}
-          
-          # Create monitoring configs
-          kubectl create configmap prometheus-config \
-            --from-file=monitoring/configs/prometheus.yml \
-            -n ${{ env.MONITORING_NAMESPACE }} \
-            --dry-run=client -o yaml | kubectl apply -f -
-          
-          kubectl create configmap grafana-dashboard \
-            --from-file=monitoring/dashboards/ \
-            -n ${{ env.MONITORING_NAMESPACE }} \
-            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: ⏳ Wait for deployments
         run: |
           echo "Waiting for deployments to be ready..."
+          kubectl rollout status deployment/postgres -n ${{ env.KUBE_NAMESPACE }} --timeout=300s
           kubectl rollout status deployment/core-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
           kubectl rollout status deployment/users-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
-          
-          # Wait for monitoring stack if exists
-          kubectl rollout status deployment/prometheus -n ${{ env.MONITORING_NAMESPACE }} --timeout=300s || true
-          kubectl rollout status deployment/grafana -n ${{ env.MONITORING_NAMESPACE }} --timeout=300s || true
-
-      - name: 🏃 Start Docker Compose services
-        run: |
-          echo "Starting production services with Docker Compose..."
-          export CORE_IMAGE=${{ needs.build-and-test.outputs.core-image }}
-          export USERS_IMAGE=${{ needs.build-and-test.outputs.users-image }}
-          
-          docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-          
-          # Wait for services to be healthy
-          echo "Waiting for services to start..."
-          sleep 30
 
       - name: 🩺 Health checks
         run: |
@@ -334,25 +223,24 @@ jobs:
           kubectl get pods -n ${{ env.KUBE_NAMESPACE }}
           kubectl get services -n ${{ env.KUBE_NAMESPACE }}
           
-          # Check Docker Compose services
-          docker-compose ps
+          # Get Minikube IP and NodePort services
+          MINIKUBE_IP=$(minikube ip)
           
-          # Health endpoint checks
+          # Health endpoint checks with NodePort
           max_attempts=10
           attempt=1
           
           while [ $attempt -le $max_attempts ]; do
             echo "Health check attempt $attempt/$max_attempts"
             
-            if curl -f -s http://localhost:5301/health > /dev/null && \
-               curl -f -s http://localhost:5302/health > /dev/null; then
+            if curl -f -s http://$MINIKUBE_IP:30301/health > /dev/null && \
+               curl -f -s http://$MINIKUBE_IP:30302/health > /dev/null; then
               echo "✅ All services are healthy!"
               break
             fi
             
             if [ $attempt -eq $max_attempts ]; then
               echo "❌ Health checks failed after $max_attempts attempts"
-              docker-compose logs
               kubectl logs -l app=core-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
               kubectl logs -l app=users-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
               exit 1
@@ -366,13 +254,14 @@ jobs:
       - name: 🧪 Integration tests
         run: |
           echo "Running integration tests..."
+          MINIKUBE_IP=$(minikube ip)
           
-          # Basic API tests
+          # Basic API tests using NodePort
           echo "Testing Core API..."
-          curl -f http://localhost:5301/api/health || exit 1
+          curl -f http://$MINIKUBE_IP:30301/health || exit 1
           
           echo "Testing Users API..."
-          curl -f http://localhost:5302/api/health || exit 1
+          curl -f http://$MINIKUBE_IP:30302/health || exit 1
           
           echo "✅ Integration tests passed!"
 
@@ -382,20 +271,25 @@ jobs:
           MINIKUBE_IP=$(minikube ip)
           
           echo "🌐 Service URLs:"
-          echo "  • Core API (Docker):    http://localhost:5301"
-          echo "  • Users API (Docker):   http://localhost:5302"
-          echo "  • Core API (K8s):       http://$MINIKUBE_IP:30301"
-          echo "  • Users API (K8s):      http://$MINIKUBE_IP:30302"
-          echo "  • Prometheus:           http://$MINIKUBE_IP:30090"
-          echo "  • Grafana:              http://$MINIKUBE_IP:30030"
-          echo ""
-          
-          echo "🐳 Docker Services:"
-          docker-compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+          echo "  • Core API:              http://$MINIKUBE_IP:30301"
+          echo "  • Users API:             http://$MINIKUBE_IP:30302"
+          echo "  • Core API Health:       http://$MINIKUBE_IP:30301/health"
+          echo "  • Users API Health:      http://$MINIKUBE_IP:30302/health"
+          echo "  • Core API Swagger:      http://$MINIKUBE_IP:30301/docs"
+          echo "  • Users API Swagger:     http://$MINIKUBE_IP:30302/docs"
           echo ""
           
           echo "☸️ Kubernetes Services:"
           kubectl get services -n ${{ env.KUBE_NAMESPACE }} -o wide
+          echo ""
+          
+          echo "🏷️ Image Tags:"
+          echo "  • Core API:  ${{ needs.build-and-test.outputs.core-image }}"
+          echo "  • Users API: ${{ needs.build-and-test.outputs.users-image }}"
+          echo ""
+          
+          echo "📦 Pods Status:"
+          kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -o wide
           echo ""
           
           echo "📊 Resource Usage:"
@@ -407,7 +301,5 @@ jobs:
         if: failure()
         run: |
           echo "Cleaning up after failure..."
-          docker-compose down -v || true
           kubectl delete namespace ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
-          kubectl delete namespace ${{ env.MONITORING_NAMESPACE }} --ignore-not-found=true
           minikube delete || true

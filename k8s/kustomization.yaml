@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- namespace.yaml
+- secrets.yaml
+- configmap.yaml
+- postgres/deployment.yaml
+- core-api/deployment.yaml
+- core-api/service.yaml
+- users-api/deployment.yaml
+- users-api/service.yaml
+- ingress.yaml
+
+images:
+- name: moclaw/ecom-core-api
+  newTag: latest
+- name: moclaw/ecom-users-api
+  newTag: latest
+
+namespace: ecommerce
