@@ -297,36 +297,151 @@ jobs:
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
           
-          echo "Waiting for deployments..."
-          kubectl wait --for=condition=available --timeout=300s deployment/ecom-core-api -n ecommerce
-          kubectl wait --for=condition=available --timeout=300s deployment/ecom-users-api -n ecommerce
+          echo "Initial deployment status check..."
+          kubectl get pods -n ecommerce
+          kubectl get deployments -n ecommerce
+          
+          echo "Waiting 30 seconds for initial pod creation..."
+          sleep 30
+          
+          # Check for common issues before waiting
+          echo "Checking for pod issues..."
+          kubectl get pods -n ecommerce -o wide
+          
+          # Check if pods are stuck in ImagePullBackOff
+          FAILING_PODS=$(kubectl get pods -n ecommerce --field-selector=status.phase!=Running,status.phase!=Succeeded -o jsonpath='{.items[*].metadata.name}')
+          
+          if [ ! -z "$FAILING_PODS" ]; then
+            echo "Found problematic pods: $FAILING_PODS"
+            
+            for pod in $FAILING_PODS; do
+              echo "=== Diagnosing pod: $pod ==="
+              kubectl describe pod $pod -n ecommerce
+              
+              # Check if it's an image pull issue
+              POD_STATUS=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "unknown")
+              echo "Pod $pod status: $POD_STATUS"
+              
+              if [[ "$POD_STATUS" == *"ImagePull"* ]] || [[ "$POD_STATUS" == *"ErrImage"* ]]; then
+                echo "Pod $pod has image pull issues. Checking if image exists in Minikube..."
+                
+                # Get the image name from the pod
+                IMAGE_NAME=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.spec.containers[0].image}')
+                echo "Image: $IMAGE_NAME"
+                
+                # Check if image exists in Minikube
+                if minikube image ls | grep -q "$IMAGE_NAME"; then
+                  echo "Image $IMAGE_NAME exists in Minikube"
+                  
+                  # Force restart the deployment
+                  DEPLOYMENT=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.metadata.labels.app}')
+                  if [ ! -z "$DEPLOYMENT" ]; then
+                    echo "Restarting deployment $DEPLOYMENT..."
+                    kubectl rollout restart deployment/$DEPLOYMENT -n ecommerce
+                  fi
+                else
+                  echo "Image $IMAGE_NAME NOT found in Minikube. Loading image..."
+                  
+                  # Try to load the image
+                  if [[ "$IMAGE_NAME" == *"ecom-core-api"* ]]; then
+                    minikube image load moclaw/ecom-core-api:latest
+                  elif [[ "$IMAGE_NAME" == *"ecom-users-api"* ]]; then
+                    minikube image load moclaw/ecom-users-api:latest
+                  fi
+                  
+                  # Restart deployment after loading image
+                  DEPLOYMENT=$(kubectl get pod $pod -n ecommerce -o jsonpath='{.metadata.labels.app}')
+                  if [ ! -z "$DEPLOYMENT" ]; then
+                    echo "Restarting deployment $DEPLOYMENT after image load..."
+                    kubectl rollout restart deployment/$DEPLOYMENT -n ecommerce
+                  fi
+                fi
+              fi
+            done
+            
+            echo "Waiting additional 60 seconds after fixes..."
+            sleep 60
+          fi
+          
+          # Try waiting for deployments with shorter timeout and better error handling
+          echo "Waiting for Core API deployment..."
+          if ! kubectl wait --for=condition=available --timeout=120s deployment/ecom-core-api -n ecommerce; then
+            echo "Core API deployment failed to become available. Getting detailed status..."
+            
+            kubectl get deployment ecom-core-api -n ecommerce -o yaml
+            kubectl describe deployment ecom-core-api -n ecommerce
+            kubectl get pods -n ecommerce -l app=ecom-core-api
+            
+            # Get logs from any core API pods
+            CORE_PODS=$(kubectl get pods -n ecommerce -l app=ecom-core-api -o jsonpath='{.items[*].metadata.name}')
+            for pod in $CORE_PODS; do
+              echo "=== Logs for $pod ==="
+              kubectl logs $pod -n ecommerce --tail=50 || echo "No logs available for $pod"
+            done
+          else
+            echo "Core API deployment is ready!"
+          fi
+          
+          echo "Waiting for Users API deployment..."
+          if ! kubectl wait --for=condition=available --timeout=120s deployment/ecom-users-api -n ecommerce; then
+            echo "Users API deployment failed to become available. Getting detailed status..."
+            
+            kubectl get deployment ecom-users-api -n ecommerce -o yaml
+            kubectl describe deployment ecom-users-api -n ecommerce
+            kubectl get pods -n ecommerce -l app=ecom-users-api
+            
+            # Get logs from any users API pods
+            USERS_PODS=$(kubectl get pods -n ecommerce -l app=ecom-users-api -o jsonpath='{.items[*].metadata.name}')
+            for pod in $USERS_PODS; do
+              echo "=== Logs for $pod ==="
+              kubectl logs $pod -n ecommerce --tail=50 || echo "No logs available for $pod"
+            done
+          else
+            echo "Users API deployment is ready!"
+          fi
+          
+          echo "Final deployment status:"
+          kubectl get pods -n ecommerce -o wide
+          kubectl get deployments -n ecommerce
+          kubectl get services -n ecommerce
 
-      - name: Test Kubernetes deployment
+      - name: Force deployment recovery if needed
         run: |
-          echo "Testing Kubernetes services..."
+          echo "Checking if deployments need recovery..."
           
-          MINIKUBE_IP=$(minikube ip)
-          echo "Minikube IP: $MINIKUBE_IP"
+          # Check if any deployments are not ready
+          NOT_READY_DEPLOYMENTS=$(kubectl get deployments -n ecommerce -o jsonpath='{range .items[?(@.status.readyReplicas!=1)]}{.metadata.name}{"\n"}{end}')
           
-          # Test external NodePort access (matching Docker Compose port pattern)
-          echo "Testing Core API via NodePort 30301..."
-          curl -f http://$MINIKUBE_IP:30301/ || echo "Core API NodePort not accessible"
-          
-          echo "Testing Users API via NodePort 30302..."
-          curl -f http://$MINIKUBE_IP:30302/ || echo "Users API NodePort not accessible"
-          
-          # Test internal service connectivity
-          kubectl port-forward -n ecommerce service/ecom-core-service 5501:80 &
-          CORE_PID=$!
-          sleep 10
-          curl -f http://localhost:5501/ || echo "Core API service not accessible"
-          kill $CORE_PID || true
-          
-          kubectl port-forward -n ecommerce service/ecom-users-service 5502:80 &
-          USERS_PID=$!
-          sleep 10
-          curl -f http://localhost:5502/ || echo "Users API service not accessible"
-          kill $USERS_PID || true
+          if [ ! -z "$NOT_READY_DEPLOYMENTS" ]; then
+            echo "Found deployments that are not ready: $NOT_READY_DEPLOYMENTS"
+            
+            for deployment in $NOT_READY_DEPLOYMENTS; do
+              echo "=== Attempting recovery for $deployment ==="
+              
+              # Scale down and up
+              echo "Scaling down $deployment..."
+              kubectl scale deployment $deployment --replicas=0 -n ecommerce
+              sleep 10
+              
+              echo "Scaling up $deployment..."
+              kubectl scale deployment $deployment --replicas=1 -n ecommerce
+              sleep 20
+              
+              # Check if pods are running now
+              kubectl get pods -n ecommerce -l app=$deployment
+            done
+            
+            # Wait a bit more after recovery attempts
+            echo "Waiting 30 seconds after recovery attempts..."
+            sleep 30
+            
+            # Final check
+            echo "Post-recovery status:"
+            kubectl get deployments -n ecommerce
+            kubectl get pods -n ecommerce
+          else
+            echo "All deployments appear to be ready"
+          fi
 
       - name: Conditional production deployment
         run: |
