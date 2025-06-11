@@ -55,14 +55,9 @@ jobs:
           echo "🧹 Cleaning up Docker…"
           docker compose down --remove-orphans || true
           docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
-          docker volume ls \
-            | grep -E "(grafana|prometheus)" \
-            | awk '{print $2}' \
-            | xargs -r docker volume rm --force || true
-          # stop/remove containers on our ports
+          docker volume ls | grep -E "(grafana|prometheus)" | awk '{print $2}' | xargs -r docker volume rm --force || true
           for port in 5301 5302 9090 3000 5401 5402 9091 3001; do
-            sudo lsof -ti:"$port" \
-              | xargs -r sudo kill -9 || true
+            sudo lsof -ti:$port | xargs -r sudo kill -9 || true
           done
           docker system prune -f || true
 
@@ -122,7 +117,7 @@ jobs:
                 args:
                   BUILDKIT_INLINE_CACHE: 1
               ports:
-                - "$CI_CORE_PORT:8080"
+                - "${CI_CORE_PORT}:8080"
             ecom.users.api:
               build:
                 context: .
@@ -130,24 +125,23 @@ jobs:
                 args:
                   BUILDKIT_INLINE_CACHE: 1
               ports:
-                - "$CI_USERS_PORT:8080"
+                - "${CI_USERS_PORT}:8080"
             prometheus:
               image: prom/prometheus
               volumes:
                 - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
               ports:
-                - "$CI_PROM_PORT:9090"
+                - "${CI_PROM_PORT}:9090"
             grafana:
               image: grafana/grafana
               environment:
                 - GF_SECURITY_ADMIN_PASSWORD=admin123
                 - GF_USERS_ALLOW_SIGN_UP=false
               ports:
-                - "$CI_GF_PORT:3000"
+                - "${CI_GF_PORT}:3000"
           EOF
-
           MAX_RETRIES=3; COUNT=0; SUCCESS=false
-          until $SUCCESS || [ $COUNT -ge $MAX_RETRIES ]; do
+          until [ "$SUCCESS" = "true" ] || [ $COUNT -ge $MAX_RETRIES ]; do
             COUNT=$((COUNT+1))
             echo "Attempt $COUNT of $MAX_RETRIES"
             docker system prune -f || true
@@ -158,14 +152,12 @@ jobs:
             fi
             sleep 5
           done
-
-          if [ "$SUCCESS" = "false" ]; then
+          if [ "$SUCCESS" != "true" ]; then
             echo "Build failed after retries; running manual dotnet restore"
             dotnet restore Ecom.Core/src/Ecom.Core.API/Ecom.Core.API.csproj --verbosity detailed || true
             dotnet restore Ecom.Users/src/Ecom.Users.API/Ecom.Users.API.csproj --verbosity detailed || true
             docker compose -f docker-compose.yml -f docker-compose.ci.yml build --no-cache || true
           fi
-
           echo "✅ Build done; spinning up"
           docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
           sleep 20
@@ -179,10 +171,13 @@ jobs:
         run: |
           echo "🐳 Building core API image…"
           build_with_retry() {
-            df=$1; tag=$2; for i in 1 2 3; do
+            df=$1; tag=$2
+            for i in 1 2 3; do
               echo "Try $i for $tag"
               if [ $i -eq 2 ]; then export DOCKER_BUILDKIT=0; fi
-              docker buildx build --file "$df" --tag "$tag" --load --progress=plain . && return 0
+              if docker buildx build --file "$df" --tag "$tag" --load --progress=plain .; then
+                return 0
+              fi
               sleep 5
             done
             echo "Failed $tag"
@@ -191,14 +186,39 @@ jobs:
           build_with_retry "Ecom.Users/src/Ecom.Users.API/Dockerfile" "moclaw/ecom-users-api:latest"
           docker images | grep moclaw || echo "⚠️ No moclaw images"
 
-      # 10) Setup Minikube
+      # 10) Setup Minikube (disable storage addons)
       - name: Set up Minikube
         uses: medyagh/setup-minikube@latest
         with:
           driver: docker
           container-runtime: docker
+          kubernetes-version: 'v1.25.13'
+          memory: '4096'
+          cpus: '2'
+          disable-addons: 'storage-provisioner,default-storageclass'
 
-      # 11) Load images into Minikube
+      # 11) Start Minikube explicitly
+      - name: Start Minikube
+        run: |
+          echo "🚀 Starting Minikube without storage addons…"
+          minikube start \
+            --driver=docker \
+            --kubernetes-version=v1.25.13 \
+            --memory=4096 \
+            --cpus=2 \
+            --addons=dashboard \
+            --disable-addons=storage-provisioner,default-storageclass \
+            --embed-certs
+
+      # 12) Verify Minikube status
+      - name: Verify Minikube status
+        run: |
+          echo "🔍 Checking Minikube status…"
+          minikube status
+          kubectl get nodes
+          kubectl get pods -A
+
+      # 13) Load images into Minikube
       - name: Load images to Minikube
         run: |
           echo "🔄 Loading images…"
@@ -206,19 +226,19 @@ jobs:
           minikube image load moclaw/ecom-users-api:latest
           minikube image ls | grep moclaw
 
-      # 12) Deploy to Kubernetes (Minikube)
+      # 14) Deploy manifests to Minikube
       - name: Deploy to Minikube
         run: |
-          echo "🚀 Applying manifests…"
+          echo "🚀 Applying k8s manifests…"
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/core-deployment.yaml
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
-          sleep 20
-          kubectl get pods,deploy,svc -n ecommerce -o wide
+          kubectl rollout status deployment/ecom-core-api -n ecommerce --timeout=120s
+          kubectl rollout status deployment/ecom-users-api -n ecommerce --timeout=120s
 
-      # 13) Force deployment recovery if needed
+      # 15) Force deployment recovery if needed
       - name: Force deployment recovery if needed
         run: |
           NEED_RECOVERY=$(kubectl get deploy -n ecommerce \
@@ -233,7 +253,7 @@ jobs:
             done
           fi
 
-      # 14) Conditional production deployment
+      # 16) Conditional production deployment
       - name: Conditional production deployment
         run: |
           PORTS_OK=true
@@ -241,7 +261,7 @@ jobs:
             sudo lsof -ti:"$p" && PORTS_OK=false
           done
           if [ "$PORTS_OK" = true ]; then
-            echo "📦 Deploying prod compose…" 
+            echo "📦 Deploying prod compose…"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
             sleep 20
             curl -f http://localhost:5301/health || true
@@ -252,7 +272,7 @@ jobs:
             echo "⚠️ Ports busy; skipping prod compose"
           fi
 
-      # 15) Display deployment summary
+      # 17) Display deployment summary
       - name: Display deployment summary
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
