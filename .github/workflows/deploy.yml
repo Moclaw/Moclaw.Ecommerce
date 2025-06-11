@@ -9,7 +9,8 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1) Pre-clean the entire repo directory (including root-owned bits)
+      - name: Reset workspace permissions
+        run: sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}"
       - name: Pre-clean workspace
         run: |
           echo "🚧 Removing stale workspace…"
