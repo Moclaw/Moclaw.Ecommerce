@@ -82,7 +82,7 @@ jobs:
       - name: Create monitoring configuration
         run: |
           echo "⚙️  Writing Prometheus config…"
-          mkdir -p monitoring
+          mkdir -p monitoring/dashboards
           cat > monitoring/prometheus.yml << 'EOF'
           global:
             scrape_interval: 15s
@@ -106,8 +106,87 @@ jobs:
                 - targets: ['ecom.users.api:8080']
               metrics_path: '/metrics'
               scrape_interval: 30s
+              
+            - job_name: 'kubernetes-nodes'
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - source_labels: [__address__]
+                  regex: '(.*):10250'
+                  target_label: __address__
+                  replacement: '${1}:9100'
           EOF
           chmod 644 monitoring/prometheus.yml
+          
+          # Create Grafana provisioning config
+          mkdir -p monitoring/grafana/provisioning/datasources
+          mkdir -p monitoring/grafana/provisioning/dashboards
+          
+          cat > monitoring/grafana/provisioning/datasources/datasource.yml << 'EOF'
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+          EOF
+          
+          cat > monitoring/grafana/provisioning/dashboards/dashboard.yml << 'EOF'
+          apiVersion: 1
+          providers:
+            - name: 'ecommerce-dashboards'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 10
+              allowUiUpdates: true
+              options:
+                path: /var/lib/grafana/dashboards
+          EOF
+          
+          # Create Ecommerce API Dashboard
+          cat > monitoring/dashboards/ecommerce-api.json << 'EOF'
+          {
+            "dashboard": {
+              "id": null,
+              "title": "Ecommerce API Metrics",
+              "tags": ["ecommerce", "api"],
+              "timezone": "browser",
+              "panels": [
+                {
+                  "id": 1,
+                  "title": "HTTP Requests Rate",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "rate(http_requests_total[5m])",
+                      "legendFormat": "{{job}} - {{method}} {{status}}"
+                    }
+                  ],
+                  "yAxes": [{"label": "requests/sec"}],
+                  "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+                },
+                {
+                  "id": 2,
+                  "title": "Response Time",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+                      "legendFormat": "95th percentile"
+                    }
+                  ],
+                  "yAxes": [{"label": "seconds"}],
+                  "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+                }
+              ],
+              "time": {"from": "now-1h", "to": "now"},
+              "refresh": "5s"
+            }
+          }
+          EOF
 
       # 7) Enable Docker Buildx
       - name: Set up Docker Buildx
@@ -154,6 +233,10 @@ jobs:
               environment:
                 - GF_SECURITY_ADMIN_PASSWORD=admin123
                 - GF_USERS_ALLOW_SIGN_UP=false
+                - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/ecommerce-api.json
+              volumes:
+                - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+                - ./monitoring/dashboards:/var/lib/grafana/dashboards:ro
               ports:
                 - "${CI_GF_PORT}:3000"
           EOF
@@ -252,8 +335,142 @@ jobs:
           kubectl apply -f k8s/core-deployment.yaml
           kubectl apply -f k8s/users-deployment.yaml
           kubectl apply -f k8s/monitoring/prometheus-config.yaml
+          
+          # Create monitoring namespace if not exists
+          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Deploy Prometheus to Kubernetes
+          kubectl apply -f - << 'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: prometheus
+            namespace: monitoring
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: prometheus
+            template:
+              metadata:
+                labels:
+                  app: prometheus
+              spec:
+                containers:
+                - name: prometheus
+                  image: prom/prometheus:latest
+                  ports:
+                  - containerPort: 9090
+                  volumeMounts:
+                  - name: config
+                    mountPath: /etc/prometheus/prometheus.yml
+                    subPath: prometheus.yml
+                volumes:
+                - name: config
+                  configMap:
+                    name: prometheus-config
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: prometheus
+            namespace: monitoring
+          spec:
+            type: NodePort
+            ports:
+            - port: 9090
+              targetPort: 9090
+              nodePort: 30090
+            selector:
+              app: prometheus
+          EOF
+          
+          # Deploy Grafana to Kubernetes with dashboard
+          kubectl apply -f - << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-dashboards
+            namespace: monitoring
+          data:
+            ecommerce-api.json: |
+              {
+                "dashboard": {
+                  "id": null,
+                  "title": "Ecommerce API Metrics",
+                  "tags": ["ecommerce", "api"],
+                  "timezone": "browser",
+                  "panels": [
+                    {
+                      "id": 1,
+                      "title": "HTTP Requests Rate",
+                      "type": "graph",
+                      "targets": [
+                        {
+                          "expr": "rate(http_requests_total[5m])",
+                          "legendFormat": "{{job}} - {{method}} {{status}}"
+                        }
+                      ],
+                      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+                    }
+                  ],
+                  "time": {"from": "now-1h", "to": "now"},
+                  "refresh": "5s"
+                }
+              }
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: grafana
+            namespace: monitoring
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: grafana
+            template:
+              metadata:
+                labels:
+                  app: grafana
+              spec:
+                containers:
+                - name: grafana
+                  image: grafana/grafana:latest
+                  ports:
+                  - containerPort: 3000
+                  env:
+                  - name: GF_SECURITY_ADMIN_PASSWORD
+                    value: "admin123"
+                  - name: GF_USERS_ALLOW_SIGN_UP
+                    value: "false"
+                  volumeMounts:
+                  - name: dashboards
+                    mountPath: /var/lib/grafana/dashboards
+                volumes:
+                - name: dashboards
+                  configMap:
+                    name: grafana-dashboards
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: grafana
+            namespace: monitoring
+          spec:
+            type: NodePort
+            ports:
+            - port: 3000
+              targetPort: 3000
+              nodePort: 30030
+            selector:
+              app: grafana
+          EOF
+          
           kubectl rollout status deployment/ecom-core-api -n ecommerce --timeout=120s
           kubectl rollout status deployment/ecom-users-api -n ecommerce --timeout=120s
+          kubectl rollout status deployment/prometheus -n monitoring --timeout=120s
+          kubectl rollout status deployment/grafana -n monitoring --timeout=120s
 
       # 15) Force deployment recovery if needed
       - name: Force deployment recovery if needed
@@ -280,7 +497,19 @@ jobs:
           if [ "$PORTS_OK" = true ]; then
             echo "📦 Deploying prod compose…"
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-            sleep 20
+            sleep 30
+            
+            # Import Grafana dashboard automatically
+            echo "📊 Importing Grafana dashboards..."
+            sleep 10  # Wait for Grafana to be ready
+            
+            # Import the ecommerce dashboard
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d @monitoring/dashboards/ecommerce-api.json \
+              http://admin:admin123@localhost:3000/api/dashboards/db || true
+              
+            # Health checks
             curl -f http://localhost:5301/health || true
             curl -f http://localhost:5302/health || true
             curl -f http://localhost:9090 || true
@@ -294,12 +523,28 @@ jobs:
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
           if docker compose ps | grep -q Up; then
-            echo "Compose services running on ports 5301,5302,9090,3000"
+            echo "✅ Compose services running:"
+            echo "  - Core API: http://localhost:5301"
+            echo "  - Users API: http://localhost:5302"
+            echo "  - Prometheus: http://localhost:9090"
+            echo "  - Grafana: http://localhost:3000 (admin/admin123)"
           else
-            echo "Compose not running"
+            echo "⚠️ Compose not running"
           fi
+          
           IP=$(minikube ip)
-          echo "Minikube services:"
+          echo ""
+          echo "✅ Minikube services:"
           kubectl get svc -n ecommerce -o wide
-          echo "Current Docker containers:"
+          kubectl get svc -n monitoring -o wide
+          echo ""
+          echo "🌐 Minikube URLs:"
+          echo "  - Prometheus: http://$IP:30090"
+          echo "  - Grafana: http://$IP:30030 (admin/admin123)"
+          echo ""
+          echo "🐳 Current Docker containers:"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          echo ""
+          echo "📊 Grafana Dashboard imported and accessible at:"
+          echo "  - Local: http://localhost:3000"
+          echo "  - Minikube: http://$IP:30030"
