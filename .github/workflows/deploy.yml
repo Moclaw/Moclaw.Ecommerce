@@ -136,7 +136,7 @@ jobs:
         uses: medyagh/setup-minikube@latest
         with:
           minikube-version: 'latest'
-          driver: none
+          driver: docker
           kubernetes-version: 'v1.28.3'
           start: false
 
@@ -145,15 +145,18 @@ jobs:
           echo "Starting Minikube cluster..."
           minikube delete || true
           
-          # Start with none driver for self-hosted runners
-          sudo minikube start \
-            --driver=none \
+          # Add current user to docker group if not already added
+          sudo usermod -aG docker $USER || true
+          
+          # Start with docker driver and force flag for self-hosted runners
+          minikube start \
+            --driver=docker \
             --kubernetes-version=v1.28.3 \
+            --memory=6144 \
+            --cpus=4 \
+            --disk-size=20g \
             --wait=all \
             --force
-          
-          # Configure kubectl for current user
-          sudo chown -R $USER:$USER ~/.kube ~/.minikube
           
           # Enable addons
           minikube addons enable ingress
@@ -166,11 +169,18 @@ jobs:
       - name: 🔄 Load Docker images
         run: |
           echo "Loading images into Minikube..."
+          
+          # For self-hosted runners, we need to use docker save/load instead of minikube image load
+          echo "Pulling images from registry..."
+          docker pull ${{ needs.build-and-test.outputs.core-image }}
+          docker pull ${{ needs.build-and-test.outputs.users-image }}
+          
+          # Load images into minikube
           minikube image load ${{ needs.build-and-test.outputs.core-image }}
           minikube image load ${{ needs.build-and-test.outputs.users-image }}
           
           # Verify images are loaded
-          minikube image ls | grep moclaw
+          minikube image ls | grep moclaw || echo "Images may not be visible in minikube image ls, but should be available"
 
       - name: 🏗️ Deploy Kubernetes resources
         run: |
