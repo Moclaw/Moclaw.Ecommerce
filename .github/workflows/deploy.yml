@@ -92,10 +92,10 @@ jobs:
         service:
           - name: core-api
             dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
-            image: ${{ needs.build-and-test.outputs.core-image }}
+            image_name: moclaw/ecom-core-api
           - name: users-api
             dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
-            image: ${{ needs.build-and-test.outputs.users-image }}
+            image_name: moclaw/ecom-users-api
       fail-fast: false
 
     steps:
@@ -118,7 +118,7 @@ jobs:
           context: .
           file: ${{ matrix.service.dockerfile }}
           push: true
-          tags: ${{ matrix.service.image }}
+          tags: ${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
