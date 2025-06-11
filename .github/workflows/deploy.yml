@@ -195,7 +195,7 @@ jobs:
           kubernetes-version: 'v1.25.13'
           memory: '4096'
           cpus: '2'
-          disable-addons: 'storage-provisioner,default-storageclass'
+          addons: dashboard
 
       # 11) Start Minikube explicitly
       - name: Start Minikube
