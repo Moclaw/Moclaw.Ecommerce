@@ -137,14 +137,31 @@ jobs:
           kubernetes-version: 'v1.33.1'
           memory: '4096'
           cpus: '2'
+          start: false
 
       - name: Start Minikube
         run: |
           echo "🚀 Starting Minikube..."
           # Delete existing cluster if it exists to avoid version conflicts
           minikube delete || true
-          minikube start --driver=docker --kubernetes-version=v1.33.1 --memory=4096 --cpus=2
+          
+          # Start with minimal addons to avoid storage issues
+          minikube start \
+            --driver=docker \
+            --kubernetes-version=v1.33.1 \
+            --memory=4096 \
+            --cpus=2 \
+            --disable-addons=storage-provisioner,default-storageclass \
+            --wait=all \
+            --wait-timeout=300s
+          
+          # Wait for cluster to be fully ready
+          echo "⏳ Waiting for cluster to be ready..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          
+          # Verify cluster status
           kubectl get nodes
+          kubectl cluster-info
 
       - name: Load images to Minikube
         run: |
