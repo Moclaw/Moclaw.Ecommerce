@@ -28,7 +28,9 @@ jobs:
     
     steps:
       - name: Reset permissions (self-hosted only)
-        run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+        run: |
+          sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+          sudo chmod -R 755 $GITHUB_WORKSPACE
 
       - name: 🧹 Pre-clean workspace
         run: |
@@ -47,6 +49,14 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+        env:
+          DOTNET_INSTALL_DIR: ${{ github.workspace }}/.dotnet
+
+      - name: 🔧 Add .NET to PATH
+        run: |
+          echo "${{ github.workspace }}/.dotnet" >> $GITHUB_PATH
+          export PATH="${{ github.workspace }}/.dotnet:$PATH"
+          dotnet --version
 
       - name: 📦 Cache NuGet packages
         uses: actions/cache@v3
