@@ -29,8 +29,8 @@ jobs:
     steps:
       - name: Reset permissions (self-hosted only)
         run: |
-          sudo chown -R $USER:$USER $GITHUB_WORKSPACE
-          sudo chmod -R 755 $GITHUB_WORKSPACE
+          chown -R $USER:$USER $GITHUB_WORKSPACE
+          chmod -R 755 $GITHUB_WORKSPACE
 
       - name: 🧹 Pre-clean workspace
         run: |
