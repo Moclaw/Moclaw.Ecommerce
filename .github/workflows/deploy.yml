@@ -2,11 +2,25 @@ name: CI/CD for Docker Compose and Minikube
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '9.0'
+  REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+  REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+  IMAGE_CORE: moclaw/ecom-core-api
+  IMAGE_USERS: moclaw/ecom-users-api
 
 jobs:
   build-and-deploy:
     runs-on: self-hosted
+    services:
+      docker:
+        image: docker:20.10-dind
+        options: --privileged
 
     steps:
       - name: Pre-clean workspace
@@ -23,42 +37,73 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup .NET
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore & Build & Test
         run: |
-          if ! command -v dotnet &> /dev/null; then
-            echo "Installing .NET..."
-            mkdir -p "$HOME/.dotnet"
-            export DOTNET_ROOT="$HOME/.dotnet"
-            export PATH="$DOTNET_ROOT:$PATH"
-            curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir "$HOME/.dotnet"
-            echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
-            echo "$HOME/.dotnet" >> "$GITHUB_PATH"
-            # Verify installation with full path
-            "$HOME/.dotnet/dotnet" --version
-          else
-            echo ".NET already available"
-            dotnet --version
-          fi
+          dotnet restore
+          dotnet build --configuration Release --no-restore
+          dotnet test --configuration Release --no-build
+
+      - name: Login to Docker registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      - name: Build Docker images
+        run: |
+          echo "🐳 Building images..."
+          build_image() {
+            local dockerfile=$1
+            local tag=$2
+            local max_attempts=3
+            local attempt=1
+
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts for $tag"
+              docker system prune -f || true
+              if [ $attempt -eq 1 ]; then
+                DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
+              elif [ $attempt -eq 2 ]; then
+                DOCKER_BUILDKIT=0 docker build -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
+              else
+                DOCKER_BUILDKIT=0 docker build --no-cache -f "$dockerfile" -t "${tag}:${{ github.sha }}" .
+              fi && return 0
+
+              echo "Build attempt $attempt failed"
+              attempt=$((attempt+1))
+              sleep 10
+            done
+
+            echo "❌ Failed to build $tag"
+            return 1
+          }
+
+          build_image "Ecom.Core/src/Ecom.Core.API/Dockerfile" "${{ env.IMAGE_CORE }}"
+          build_image "Ecom.Users/src/Ecom.Users.API/Dockerfile" "${{ env.IMAGE_USERS }}"
 
       - name: Create monitoring configuration
         run: |
           echo "⚙️ Creating monitoring config..."
           mkdir -p monitoring/dashboards
-          
           cat > monitoring/prometheus.yml << 'EOF'
           global:
             scrape_interval: 15s
           scrape_configs:
-            - job_name: 'ecom-core-api'
+            - job_name: 'core-api'
               static_configs:
-                - targets: ['ecom.core.api:8080']
+                - targets: ['core-api-service:5301']
               metrics_path: '/metrics'
-            - job_name: 'ecom-users-api'
+            - job_name: 'users-api'
               static_configs:
-                - targets: ['ecom.users.api:8080']
+                - targets: ['users-api-service:5302']
               metrics_path: '/metrics'
           EOF
-          
           cat > monitoring/dashboards/ecommerce-api.json << 'EOF'
           {
             "dashboard": {
@@ -76,268 +121,58 @@ jobs:
           }
           EOF
 
-      - name: Build Docker images
-        run: |
-          echo "🐳 Building images..."
-          
-          # Function to build with retries
-          build_image() {
-            local dockerfile=$1
-            local tag=$2
-            local max_attempts=3
-            local attempt=1
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts for $tag"
-              
-              # Clean up any partial builds
-              docker system prune -f || true
-              
-              # Try building with different strategies
-              if [ $attempt -eq 1 ]; then
-                # First attempt with BuildKit
-                DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$tag" . && return 0
-              elif [ $attempt -eq 2 ]; then
-                # Second attempt without BuildKit
-                DOCKER_BUILDKIT=0 docker build -f "$dockerfile" -t "$tag" . && return 0
-              else
-                # Third attempt with no cache
-                DOCKER_BUILDKIT=0 docker build --no-cache -f "$dockerfile" -t "$tag" . && return 0
-              fi
-              
-              echo "Build attempt $attempt failed, cleaning up..."
-              docker system prune -f || true
-              sleep 10
-              attempt=$((attempt + 1))
-            done
-            
-            echo "❌ Failed to build $tag after $max_attempts attempts"
-            return 1
-          }
-          
-          # Build Core API
-          if ! build_image "Ecom.Core/src/Ecom.Core.API/Dockerfile" "moclaw/ecom-core-api:latest"; then
-            echo "❌ Core API build failed"
-            exit 1
-          fi
-          
-          # Build Users API  
-          if ! build_image "Ecom.Users/src/Ecom.Users.API/Dockerfile" "moclaw/ecom-users-api:latest"; then
-            echo "❌ Users API build failed"
-            exit 1
-          fi
-          
-          echo "✅ All images built successfully"
-          docker images | grep moclaw
-
       - name: Setup Minikube
         uses: medyagh/setup-minikube@latest
         with:
           driver: docker
           kubernetes-version: 'v1.33.1'
-          memory: '4096'
-          cpus: '2'
+          memory: 4096
+          cpus: 2
           start: false
 
       - name: Start Minikube
         run: |
           echo "🚀 Starting Minikube..."
-          # Delete existing cluster if it exists to avoid version conflicts
           minikube delete || true
-          
-          # Start with basic configuration
-          minikube start \
-            --driver=docker \
-            --kubernetes-version=v1.33.1 \
-            --memory=4096 \
-            --cpus=2 \
-            --wait=all
-          
-          # Disable problematic addons after start
+          minikube start --driver=docker --kubernetes-version=v1.33.1 --memory=4096 --cpus=2 --wait=all
           minikube addons disable storage-provisioner || true
           minikube addons disable default-storageclass || true
-          
-          # Wait for cluster to be fully ready
-          echo "⏳ Waiting for cluster to be ready..."
           kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          
-          # Verify cluster status
-          kubectl get nodes
-          kubectl cluster-info
 
       - name: Load images to Minikube
         run: |
           echo "🔄 Loading images..."
-          minikube image load moclaw/ecom-core-api:latest
-          minikube image load moclaw/ecom-users-api:latest
+          minikube image load "${{ env.IMAGE_CORE }}:${{ github.sha }}"
+          minikube image load "${{ env.IMAGE_USERS }}:${{ github.sha }}"
 
-      - name: Deploy to Minikube
+      - name: Deploy Kubernetes manifests
         run: |
           echo "🚀 Deploying to Kubernetes..."
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/core-deployment.yaml
-          kubectl apply -f k8s/users-deployment.yaml
+          kubectl apply -f k8s/
+          kubectl set image deployment/core-api core-api="${{ env.IMAGE_CORE }}:${{ github.sha }}" -n ecommerce
+          kubectl set image deployment/users-api users-api="${{ env.IMAGE_USERS }}:${{ github.sha }}" -n ecommerce
           
-          # Create monitoring namespace
-          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Deploy Prometheus
-          kubectl apply -f - << 'EOF'
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: prometheus
-            namespace: monitoring
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: prometheus
-            template:
-              metadata:
-                labels:
-                  app: prometheus
-              spec:
-                containers:
-                - name: prometheus
-                  image: prom/prometheus:latest
-                  ports:
-                  - containerPort: 9090
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: prometheus
-            namespace: monitoring
-          spec:
-            type: NodePort
-            ports:
-            - port: 9090
-              nodePort: 30090
-            selector:
-              app: prometheus
-          EOF
-          
-          # Deploy Grafana
-          kubectl apply -f - << 'EOF'
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: grafana
-            namespace: monitoring
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: grafana
-            template:
-              metadata:
-                labels:
-                  app: grafana
-              spec:
-                containers:
-                - name: grafana
-                  image: grafana/grafana:latest
-                  ports:
-                  - containerPort: 3000
-                  env:
-                  - name: GF_SECURITY_ADMIN_PASSWORD
-                    value: "admin123"
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: grafana
-            namespace: monitoring
-          spec:
-            type: NodePort
-            ports:
-            - port: 3000
-              nodePort: 30030
-            selector:
-              app: grafana
-          EOF
-          
-          echo "📊 Checking deployment status..."
-          
-          # Function to check deployment with debugging
-          check_deployment() {
-            local deployment=$1
-            local namespace=$2
-            local timeout=${3:-60}
-            
-            echo "Checking deployment $deployment in namespace $namespace..."
-            
-            # Check if deployment exists
-            if ! kubectl get deployment $deployment -n $namespace &>/dev/null; then
-              echo "❌ Deployment $deployment not found in namespace $namespace"
-              return 1
-            fi
-            
-            # Wait with shorter timeout and better error handling
-            if ! kubectl rollout status deployment/$deployment -n $namespace --timeout=${timeout}s; then
-              echo "⚠️ Deployment $deployment timed out, checking status..."
-              
-              # Debug information
-              echo "Pod status:"
-              kubectl get pods -n $namespace -l app=$deployment
-              echo "Pod describe:"
-              kubectl describe pods -n $namespace -l app=$deployment
-              echo "Deployment describe:"
-              kubectl describe deployment $deployment -n $namespace
-              
-              # Try to restart deployment
-              echo "🔄 Restarting deployment $deployment..."
-              kubectl rollout restart deployment/$deployment -n $namespace
-              sleep 30
-              
-              # Check again with shorter timeout
-              if ! kubectl rollout status deployment/$deployment -n $namespace --timeout=60s; then
-                echo "❌ Deployment $deployment failed after restart"
-                return 1
-              fi
-            fi
-            
-            echo "✅ Deployment $deployment is ready"
-            return 0
-          }
-          
-          # Check deployments one by one with better error handling
-          check_deployment "ecom-core-api" "ecommerce" 90 || echo "⚠️ Core API deployment issues"
-          check_deployment "ecom-users-api" "ecommerce" 90 || echo "⚠️ Users API deployment issues"
-          check_deployment "prometheus" "monitoring" 60 || echo "⚠️ Prometheus deployment issues"
-          check_deployment "grafana" "monitoring" 60 || echo "⚠️ Grafana deployment issues"
-          
-          echo "📋 Final deployment status:"
-          kubectl get deployments -n ecommerce
-          kubectl get deployments -n monitoring
-          kubectl get pods -n ecommerce
-          kubectl get pods -n monitoring
+          kubectl create configmap prometheus-config --from-file=monitoring/prometheus.yml -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+          kubectl rollout status deployment/core-api -n ecommerce --timeout=300s
+          kubectl rollout status deployment/users-api -n ecommerce --timeout=300s
 
       - name: Deploy production services
         run: |
           echo "📦 Deploying production services..."
           docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+          echo "Waiting for services..."
           sleep 20
-          
-          # Health checks
-          curl -f http://localhost:5301/health || echo "Core API not ready"
-          curl -f http://localhost:5302/health || echo "Users API not ready"
-          curl -f http://localhost:9090 || echo "Prometheus not ready"
-          curl -f http://localhost:3000 || echo "Grafana not ready"
+          curl -f http://localhost:5301/health && curl -f http://localhost:5302/health
 
       - name: Display deployment summary
         run: |
           echo "=== DEPLOYMENT SUMMARY ==="
           IP=$(minikube ip)
-          echo "🌐 Services:"
-          echo "  - Core API: http://localhost:5301"
-          echo "  - Users API: http://localhost:5302"
-          echo "  - Prometheus: http://localhost:9090 | http://$IP:30090"
-          echo "  - Grafana: http://localhost:3000 | http://$IP:30030 (admin/admin123)"
-          
-          echo ""
-          echo "📊 Kubernetes Status:"
+          echo "Core API: http://localhost:5301"
+          echo "Users API: http://localhost:5302"
+          echo "Prometheus: http://$IP:30090"
+          echo "Grafana: http://$IP:30030 (admin/admin123)"
           kubectl get svc -n ecommerce
           kubectl get svc -n monitoring
