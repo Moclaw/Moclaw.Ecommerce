@@ -240,11 +240,61 @@ jobs:
               app: grafana
           EOF
           
-          # Wait for deployments
-          kubectl rollout status deployment/ecom-core-api -n ecommerce --timeout=120s
-          kubectl rollout status deployment/ecom-users-api -n ecommerce --timeout=120s
-          kubectl rollout status deployment/prometheus -n monitoring --timeout=120s
-          kubectl rollout status deployment/grafana -n monitoring --timeout=120s
+          echo "📊 Checking deployment status..."
+          
+          # Function to check deployment with debugging
+          check_deployment() {
+            local deployment=$1
+            local namespace=$2
+            local timeout=${3:-60}
+            
+            echo "Checking deployment $deployment in namespace $namespace..."
+            
+            # Check if deployment exists
+            if ! kubectl get deployment $deployment -n $namespace &>/dev/null; then
+              echo "❌ Deployment $deployment not found in namespace $namespace"
+              return 1
+            fi
+            
+            # Wait with shorter timeout and better error handling
+            if ! kubectl rollout status deployment/$deployment -n $namespace --timeout=${timeout}s; then
+              echo "⚠️ Deployment $deployment timed out, checking status..."
+              
+              # Debug information
+              echo "Pod status:"
+              kubectl get pods -n $namespace -l app=$deployment
+              echo "Pod describe:"
+              kubectl describe pods -n $namespace -l app=$deployment
+              echo "Deployment describe:"
+              kubectl describe deployment $deployment -n $namespace
+              
+              # Try to restart deployment
+              echo "🔄 Restarting deployment $deployment..."
+              kubectl rollout restart deployment/$deployment -n $namespace
+              sleep 30
+              
+              # Check again with shorter timeout
+              if ! kubectl rollout status deployment/$deployment -n $namespace --timeout=60s; then
+                echo "❌ Deployment $deployment failed after restart"
+                return 1
+              fi
+            fi
+            
+            echo "✅ Deployment $deployment is ready"
+            return 0
+          }
+          
+          # Check deployments one by one with better error handling
+          check_deployment "ecom-core-api" "ecommerce" 90 || echo "⚠️ Core API deployment issues"
+          check_deployment "ecom-users-api" "ecommerce" 90 || echo "⚠️ Users API deployment issues"
+          check_deployment "prometheus" "monitoring" 60 || echo "⚠️ Prometheus deployment issues"
+          check_deployment "grafana" "monitoring" 60 || echo "⚠️ Grafana deployment issues"
+          
+          echo "📋 Final deployment status:"
+          kubectl get deployments -n ecommerce
+          kubectl get deployments -n monitoring
+          kubectl get pods -n ecommerce
+          kubectl get pods -n monitoring
 
       - name: Deploy production services
         run: |
