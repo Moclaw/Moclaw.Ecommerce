@@ -13,7 +13,21 @@ jobs:
       - name: Pre-clean workspace
         run: |
           echo "🚧 Removing stale workspace…"
-          sudo rm -rf "${{ runner.workspace }}/${{ github.repository }}" || true
+          # Stop any running containers first
+          docker stop $(docker ps -aq) 2>/dev/null || true
+          docker rm $(docker ps -aq) 2>/dev/null || true
+          # Remove Docker volumes that might have bind mounts
+          docker volume prune -f || true
+          # Handle Docker-created directories with root ownership
+          if [ -d "${{ runner.workspace }}/${{ github.repository }}" ]; then
+            echo "Cleaning Docker-created files with sudo..."
+            sudo find "${{ runner.workspace }}/${{ github.repository }}" -type d -name "grafana" -exec rm -rf {} + 2>/dev/null || true
+            sudo find "${{ runner.workspace }}/${{ github.repository }}" -type d -name "prometheus" -exec rm -rf {} + 2>/dev/null || true
+            sudo find "${{ runner.workspace }}/${{ github.repository }}" -name "*.log" -delete 2>/dev/null || true
+            sudo rm -rf "${{ runner.workspace }}/${{ github.repository }}" || true
+          fi
+          # Ensure clean slate
+          mkdir -p "${{ runner.workspace }}/${{ github.repository }}" || true
 
       # 2) Checkout code
       - name: Checkout code
@@ -55,7 +69,11 @@ jobs:
           echo "🧹 Cleaning up Docker…"
           docker compose down --remove-orphans || true
           docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
+          # Remove specific volumes and any grafana/prometheus data
           docker volume ls | grep -E "(grafana|prometheus)" | awk '{print $2}' | xargs -r docker volume rm --force || true
+          # Clean up any Docker-created directories
+          sudo rm -rf ./monitoring/grafana 2>/dev/null || true
+          sudo rm -rf ./monitoring/prometheus 2>/dev/null || true
           for port in 5301 5302 9090 3000 5401 5402 9091 3001; do
             sudo lsof -ti:$port | xargs -r sudo kill -9 || true
           done
