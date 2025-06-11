@@ -15,9 +15,9 @@ jobs:
           docker stop $(docker ps -aq) 2>/dev/null || true
           docker rm $(docker ps -aq) 2>/dev/null || true
           docker system prune -f || true
-          sudo rm -rf ./monitoring 2>/dev/null || true
+          rm -rf ./monitoring 2>/dev/null || true
           for port in 5301 5302 9090 3000; do
-            sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+            lsof -ti:$port | xargs -r kill -9 2>/dev/null || true
           done
 
       - name: Checkout code
