@@ -27,6 +27,9 @@ jobs:
       users-image: ${{ steps.meta.outputs.users-image }}
     
     steps:
+      - name: Reset permissions (self-hosted only)
+        run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+
       - name: 🧹 Pre-clean workspace
         run: |
           echo "Cleaning workspace and stopping services..."
