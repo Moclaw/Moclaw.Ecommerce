@@ -9,8 +9,27 @@ jobs:
     runs-on: self-hosted
     
     steps:
+      - name: Fix workspace permissions
+        run: |
+          echo "Fixing workspace permissions..."
+          
+          # Fix any permission issues in the workspace
+          sudo chown -R $(whoami):$(whoami) $GITHUB_WORKSPACE || true
+          sudo chmod -R 755 $GITHUB_WORKSPACE || true
+          
+          # Remove any Docker volume mounts that might be causing issues
+          if [ -d "$GITHUB_WORKSPACE/monitoring" ]; then
+            sudo rm -rf $GITHUB_WORKSPACE/monitoring || true
+          fi
+          
+          # Clean up any existing grafana data
+          docker volume ls | grep grafana | awk '{print $2}' | xargs -r docker volume rm --force || true
+          docker volume ls | grep prometheus | awk '{print $2}' | xargs -r docker volume rm --force || true
+
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          clean: true
 
       - name: Setup .NET with proper permissions
         run: |
@@ -48,6 +67,9 @@ jobs:
           docker compose down --remove-orphans || true
           docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans || true
           
+          # Remove any volumes that might be causing permission issues
+          docker volume ls | grep -E "(grafana|prometheus)" | awk '{print $2}' | xargs -r docker volume rm --force || true
+          
           # Stop and remove any containers using our target ports
           echo "Stopping containers using target ports..."
           docker ps --format "table {{.ID}}\t{{.Ports}}" | grep -E "(5301|5302|9090|3000)" | awk '{print $1}' | xargs -r docker stop || true
@@ -69,6 +91,42 @@ jobs:
           docker system prune -f || true
           
           echo "Cleanup completed"
+
+      - name: Create monitoring configuration
+        run: |
+          echo "Creating monitoring configuration files..."
+          
+          # Create monitoring directory structure
+          mkdir -p monitoring
+          
+          # Create prometheus configuration
+          cat > monitoring/prometheus.yml << 'EOF'
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+            external_labels:
+              monitor: 'ecommerce-monitor'
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+
+            - job_name: 'ecom-core-api'
+              static_configs:
+                - targets: ['ecom.core.api:8080']
+              metrics_path: '/metrics'
+              scrape_interval: 30s
+
+            - job_name: 'ecom-users-api'
+              static_configs:
+                - targets: ['ecom.users.api:8080']
+              metrics_path: '/metrics'
+              scrape_interval: 30s
+          EOF
+          
+          # Set proper permissions
+          chmod 644 monitoring/prometheus.yml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -111,9 +169,15 @@ jobs:
             prometheus:
               ports:
                 - "$CI_PROMETHEUS_PORT:9090"
+              volumes:
+                - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
             grafana:
               ports:
                 - "$CI_GRAFANA_PORT:3000"
+              environment:
+                - GF_SECURITY_ADMIN_PASSWORD=admin123
+                - GF_USERS_ALLOW_SIGN_UP=false
+                - GF_INSTALL_PLUGINS=
           EOF
           
           # Retry mechanism for Docker build
