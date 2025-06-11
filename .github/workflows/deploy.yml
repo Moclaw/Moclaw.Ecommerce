@@ -292,5 +292,19 @@ jobs:
         if: failure()
         run: |
           echo "Cleaning up after failure..."
-          kubectl delete namespace ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
-          minikube delete || true
+          
+          # Check if minikube is running and kubectl is accessible
+          if minikube status >/dev/null 2>&1; then
+            echo "Minikube is running, attempting to cleanup namespace..."
+            kubectl delete namespace ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true || echo "Namespace cleanup failed or not needed"
+          else
+            echo "Minikube not running or kubectl not accessible, skipping namespace cleanup"
+          fi
+          
+          # Always try to delete minikube cluster
+          echo "Deleting minikube cluster..."
+          minikube delete || echo "Minikube deletion failed or cluster already deleted"
+          
+          # Additional cleanup
+          docker system prune -f || true
+          echo "Cleanup completed"
