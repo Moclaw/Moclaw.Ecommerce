@@ -119,9 +119,8 @@ jobs:
           file: ${{ matrix.service.dockerfile }}
           push: true
           tags: ${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           platforms: linux/amd64
+          no-cache: true
 
   deploy-minikube:
     name: Deploy to Minikube
