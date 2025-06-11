@@ -32,8 +32,6 @@ jobs:
       # 2) Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
-        with:
-          clean: true
 
       # 3) Fix any lingering permission issues
       - name: Fix workspace permissions
