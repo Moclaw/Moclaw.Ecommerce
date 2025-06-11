@@ -186,17 +186,38 @@ jobs:
         run: |
           echo "Loading images into Minikube..."
           
+          # Debug: Show what image tags we received
+          echo "Debug: Checking image tag outputs..."
+          echo "Core image: '${{ needs.build-and-test.outputs.core-image }}'"
+          echo "Users image: '${{ needs.build-and-test.outputs.users-image }}'"
+          echo "Image tag: '${{ needs.build-and-test.outputs.image-tag }}'"
+          
+          # Verify we have valid image names
+          if [ -z "${{ needs.build-and-test.outputs.core-image }}" ] || [ -z "${{ needs.build-and-test.outputs.users-image }}" ]; then
+            echo "❌ Error: Image tags are empty. Check build-and-test job outputs."
+            echo "Available outputs from build-and-test job:"
+            echo "- image-tag: ${{ needs.build-and-test.outputs.image-tag }}"
+            echo "- core-image: ${{ needs.build-and-test.outputs.core-image }}"
+            echo "- users-image: ${{ needs.build-and-test.outputs.users-image }}"
+            exit 1
+          fi
+          
           # For self-hosted runners, we need to use docker save/load instead of minikube image load
           echo "Pulling images from registry..."
-          docker pull ${{ needs.build-and-test.outputs.core-image }}
-          docker pull ${{ needs.build-and-test.outputs.users-image }}
+          docker pull "${{ needs.build-and-test.outputs.core-image }}"
+          docker pull "${{ needs.build-and-test.outputs.users-image }}"
           
           # Load images into minikube
-          minikube image load ${{ needs.build-and-test.outputs.core-image }}
-          minikube image load ${{ needs.build-and-test.outputs.users-image }}
+          minikube image load "${{ needs.build-and-test.outputs.core-image }}"
+          minikube image load "${{ needs.build-and-test.outputs.users-image }}"
           
           # Verify images are loaded
+          echo "Verifying images in Minikube..."
           minikube image ls | grep moclaw || echo "Images may not be visible in minikube image ls, but should be available"
+          
+          # Also check if images exist in local docker
+          echo "Local Docker images:"
+          docker images | grep moclaw || echo "No moclaw images found in local Docker"
 
       - name: 🏗️ Deploy Kubernetes resources
         run: |
