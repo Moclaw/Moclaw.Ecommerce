@@ -79,8 +79,56 @@ jobs:
       - name: Build Docker images
         run: |
           echo "🐳 Building images..."
-          docker build -f Ecom.Core/src/Ecom.Core.API/Dockerfile -t moclaw/ecom-core-api:latest .
-          docker build -f Ecom.Users/src/Ecom.Users.API/Dockerfile -t moclaw/ecom-users-api:latest .
+          
+          # Function to build with retries
+          build_image() {
+            local dockerfile=$1
+            local tag=$2
+            local max_attempts=3
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts for $tag"
+              
+              # Clean up any partial builds
+              docker system prune -f || true
+              
+              # Try building with different strategies
+              if [ $attempt -eq 1 ]; then
+                # First attempt with BuildKit
+                DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$tag" . && return 0
+              elif [ $attempt -eq 2 ]; then
+                # Second attempt without BuildKit
+                DOCKER_BUILDKIT=0 docker build -f "$dockerfile" -t "$tag" . && return 0
+              else
+                # Third attempt with no cache
+                DOCKER_BUILDKIT=0 docker build --no-cache -f "$dockerfile" -t "$tag" . && return 0
+              fi
+              
+              echo "Build attempt $attempt failed, cleaning up..."
+              docker system prune -f || true
+              sleep 10
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Failed to build $tag after $max_attempts attempts"
+            return 1
+          }
+          
+          # Build Core API
+          if ! build_image "Ecom.Core/src/Ecom.Core.API/Dockerfile" "moclaw/ecom-core-api:latest"; then
+            echo "❌ Core API build failed"
+            exit 1
+          fi
+          
+          # Build Users API  
+          if ! build_image "Ecom.Users/src/Ecom.Users.API/Dockerfile" "moclaw/ecom-users-api:latest"; then
+            echo "❌ Users API build failed"
+            exit 1
+          fi
+          
+          echo "✅ All images built successfully"
+          docker images | grep moclaw
 
       - name: Setup Minikube
         uses: medyagh/setup-minikube@latest
