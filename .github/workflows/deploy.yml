@@ -28,11 +28,17 @@ jobs:
           if ! command -v dotnet &> /dev/null; then
             echo "Installing .NET..."
             mkdir -p "$HOME/.dotnet"
+            export DOTNET_ROOT="$HOME/.dotnet"
+            export PATH="$DOTNET_ROOT:$PATH"
             curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 9.0 --install-dir "$HOME/.dotnet"
             echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
             echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+            # Verify installation with full path
+            "$HOME/.dotnet/dotnet" --version
+          else
+            echo ".NET already available"
+            dotnet --version
           fi
-          dotnet --version
 
       - name: Create monitoring configuration
         run: |
