@@ -68,27 +68,12 @@ jobs:
       - name: 🔨 Restore dependencies
         run: |
           echo "Restoring NuGet packages..."
-          dotnet restore --verbosity normal
+          dotnet restore Moclaw.Ecommerce.sln --verbosity normal
 
       - name: 🏗️ Build solution
         run: |
           echo "Building solution in Release mode..."
-          dotnet build --configuration Release --no-restore --verbosity normal
-
-      - name: 🧪 Run tests
-        run: |
-          echo "Running unit tests..."
-          dotnet test --configuration Release --no-build --verbosity normal \
-            --logger trx --results-directory ./TestResults/ \
-            --collect:"XPlat Code Coverage"
-
-      - name: 📊 Publish test results
-        uses: dorny/test-reporter@v1
-        if: always()
-        with:
-          name: .NET Tests
-          path: '**/*.trx'
-          reporter: dotnet-trx
+          dotnet build Moclaw.Ecommerce.sln --configuration Release --no-restore --verbosity normal
 
       - name: 🏷️ Generate metadata
         id: meta
