@@ -186,30 +186,32 @@ jobs:
         run: |
           echo "Loading images into Minikube..."
           
-          # Debug: Show what image tags we received
+          # Debug: Show what image tag outputs we received
           echo "Debug: Checking image tag outputs..."
-          echo "Core image: '${{ needs.build-and-test.outputs.core-image }}'"
-          echo "Users image: '${{ needs.build-and-test.outputs.users-image }}'"
           echo "Image tag: '${{ needs.build-and-test.outputs.image-tag }}'"
           
+          # Construct image names using the tag from build-and-test
+          CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
+          USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
+          
+          echo "Constructed image names:"
+          echo "Core image: $CORE_IMAGE"
+          echo "Users image: $USERS_IMAGE"
+          
           # Verify we have valid image names
-          if [ -z "${{ needs.build-and-test.outputs.core-image }}" ] || [ -z "${{ needs.build-and-test.outputs.users-image }}" ]; then
-            echo "❌ Error: Image tags are empty. Check build-and-test job outputs."
-            echo "Available outputs from build-and-test job:"
-            echo "- image-tag: ${{ needs.build-and-test.outputs.image-tag }}"
-            echo "- core-image: ${{ needs.build-and-test.outputs.core-image }}"
-            echo "- users-image: ${{ needs.build-and-test.outputs.users-image }}"
+          if [ -z "${{ needs.build-and-test.outputs.image-tag }}" ]; then
+            echo "❌ Error: Image tag is empty. Check build-and-test job outputs."
             exit 1
           fi
           
           # For self-hosted runners, we need to use docker save/load instead of minikube image load
           echo "Pulling images from registry..."
-          docker pull "${{ needs.build-and-test.outputs.core-image }}"
-          docker pull "${{ needs.build-and-test.outputs.users-image }}"
+          docker pull "$CORE_IMAGE"
+          docker pull "$USERS_IMAGE"
           
           # Load images into minikube
-          minikube image load "${{ needs.build-and-test.outputs.core-image }}"
-          minikube image load "${{ needs.build-and-test.outputs.users-image }}"
+          minikube image load "$CORE_IMAGE"
+          minikube image load "$USERS_IMAGE"
           
           # Verify images are loaded
           echo "Verifying images in Minikube..."
@@ -222,6 +224,10 @@ jobs:
       - name: 🏗️ Deploy Kubernetes resources
         run: |
           echo "Deploying Kubernetes manifests..."
+          
+          # Construct image names using the tag from build-and-test
+          CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
+          USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
           
           # Create namespaces
           kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
@@ -239,11 +245,11 @@ jobs:
           
           # Update image tags
           kubectl set image deployment/core-api \
-            core-api=${{ needs.build-and-test.outputs.core-image }} \
+            core-api=$CORE_IMAGE \
             -n ${{ env.KUBE_NAMESPACE }}
           
           kubectl set image deployment/users-api \
-            users-api=${{ needs.build-and-test.outputs.users-image }} \
+            users-api=$USERS_IMAGE \
             -n ${{ env.KUBE_NAMESPACE }}
 
       - name: ⏳ Wait for deployments
@@ -322,8 +328,8 @@ jobs:
           echo ""
           
           echo "🏷️ Image Tags:"
-          echo "  • Core API:  ${{ needs.build-and-test.outputs.core-image }}"
-          echo "  • Users API: ${{ needs.build-and-test.outputs.users-image }}"
+          echo "  • Core API:  ${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
+          echo "  • Users API: ${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
           echo ""
           
           echo "📦 Pods Status:"
