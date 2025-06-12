@@ -258,9 +258,62 @@ jobs:
       - name: ⏳ Wait for deployments
         run: |
           echo "Waiting for deployments to be ready..."
-          kubectl rollout status deployment/postgres -n ${{ env.KUBE_NAMESPACE }} --timeout=300s
-          kubectl rollout status deployment/core-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
-          kubectl rollout status deployment/users-api -n ${{ env.KUBE_NAMESPACE }} --timeout=600s
+          
+          # Function to check deployment status with detailed info
+          check_deployment_status() {
+            local deployment=$1
+            local namespace=$2
+            
+            echo "Checking status of deployment: $deployment"
+            kubectl get deployment $deployment -n $namespace -o wide
+            kubectl describe deployment $deployment -n $namespace
+            
+            echo "Pods for $deployment:"
+            kubectl get pods -l app=$deployment -n $namespace -o wide
+            
+            echo "Events for $deployment:"
+            kubectl get events --field-selector involvedObject.name=$deployment -n $namespace --sort-by='.lastTimestamp'
+            
+            echo "Recent logs for $deployment:"
+            kubectl logs -l app=$deployment -n $namespace --tail=20 || echo "No logs available yet"
+          }
+          
+          # Wait for postgres first (it's a dependency)
+          echo "Waiting for PostgreSQL to be ready..."
+          if ! kubectl rollout status deployment/postgres -n ${{ env.KUBE_NAMESPACE }} --timeout=300s; then
+            echo "❌ PostgreSQL deployment failed"
+            check_deployment_status "postgres" "${{ env.KUBE_NAMESPACE }}"
+            exit 1
+          fi
+          echo "✅ PostgreSQL is ready"
+          
+          # Wait for core-api with extended timeout and better diagnostics
+          echo "Waiting for Core API to be ready..."
+          if ! kubectl rollout status deployment/core-api -n ${{ env.KUBE_NAMESPACE }} --timeout=900s; then
+            echo "❌ Core API deployment failed or timed out"
+            check_deployment_status "core-api" "${{ env.KUBE_NAMESPACE }}"
+            
+            # Additional troubleshooting
+            echo "Checking for resource constraints..."
+            kubectl describe nodes | grep -A 5 "Allocated resources" || true
+            
+            echo "Checking image pull status..."
+            kubectl get events -n ${{ env.KUBE_NAMESPACE }} --sort-by='.lastTimestamp' | grep -i "pull\|image" || true
+            
+            exit 1
+          fi
+          echo "✅ Core API is ready"
+          
+          # Wait for users-api with extended timeout
+          echo "Waiting for Users API to be ready..."
+          if ! kubectl rollout status deployment/users-api -n ${{ env.KUBE_NAMESPACE }} --timeout=900s; then
+            echo "❌ Users API deployment failed or timed out"
+            check_deployment_status "users-api" "${{ env.KUBE_NAMESPACE }}"
+            exit 1
+          fi
+          echo "✅ Users API is ready"
+          
+          echo "✅ All deployments are ready!"
 
       - name: 🩺 Health checks
         run: |
@@ -272,29 +325,53 @@ jobs:
           
           # Get Minikube IP and NodePort services
           MINIKUBE_IP=$(minikube ip)
+          echo "Minikube IP: $MINIKUBE_IP"
+          
+          # Wait for services to be ready before health checks
+          echo "Waiting for services to be accessible..."
+          sleep 30
           
           # Health endpoint checks with NodePort
-          max_attempts=10
+          max_attempts=15
           attempt=1
           
           while [ $attempt -le $max_attempts ]; do
             echo "Health check attempt $attempt/$max_attempts"
             
-            if curl -f -s http://$MINIKUBE_IP:30301/health > /dev/null && \
-               curl -f -s http://$MINIKUBE_IP:30302/health > /dev/null; then
+            # Check if services are accessible
+            core_api_status=$(curl -s -o /dev/null -w "%{http_code}" http://$MINIKUBE_IP:30301/health || echo "000")
+            users_api_status=$(curl -s -o /dev/null -w "%{http_code}" http://$MINIKUBE_IP:30302/health || echo "000")
+            
+            echo "Core API status: $core_api_status"
+            echo "Users API status: $users_api_status"
+            
+            if [ "$core_api_status" = "200" ] && [ "$users_api_status" = "200" ]; then
               echo "✅ All services are healthy!"
               break
             fi
             
             if [ $attempt -eq $max_attempts ]; then
               echo "❌ Health checks failed after $max_attempts attempts"
+              echo "Final status - Core API: $core_api_status, Users API: $users_api_status"
+              
+              # Detailed diagnostics
+              echo "Service endpoints:"
+              kubectl get endpoints -n ${{ env.KUBE_NAMESPACE }}
+              
+              echo "Pod details:"
+              kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -o wide
+              
+              echo "Core API logs:"
               kubectl logs -l app=core-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
+              
+              echo "Users API logs:"
               kubectl logs -l app=users-api -n ${{ env.KUBE_NAMESPACE }} --tail=50
+              
               exit 1
             fi
             
             echo "Services not ready yet, waiting..."
-            sleep 15
+            sleep 20
             attempt=$((attempt+1))
           done
 
