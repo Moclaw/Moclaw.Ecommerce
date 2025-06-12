@@ -13,6 +13,12 @@ env:
   IMAGE_CORE: moclaw/ecom-core-api
   IMAGE_USERS: moclaw/ecom-users-api
   KUBE_NAMESPACE: ecommerce
+  # SSH Connection via Cloudflare Tunnel
+  CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+  CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+  CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
   # Optimization: Use shorter timeouts
   KUBECTL_TIMEOUT: 300s
   HEALTH_CHECK_TIMEOUT: 180s
@@ -20,7 +26,7 @@ env:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
       should-deploy: ${{ steps.changes.outputs.should-deploy }}
@@ -31,7 +37,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Optimization: Check for changes to skip unnecessary builds
       - name: 🔍 Check for changes
         id: changes
         run: |
@@ -42,7 +47,6 @@ jobs:
             echo "should-deploy=true" >> $GITHUB_OUTPUT
             echo "Main branch - will deploy"
           else
-            # Check if there are changes in source code directories
             if git diff --name-only HEAD~1 HEAD | grep -E "\.(cs|csproj|sln|Dockerfile)$|^k8s/"; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "Source code changes detected - will deploy"
@@ -52,13 +56,6 @@ jobs:
             fi
           fi
 
-      # Optimization: Lightweight cleanup
-      - name: 🧹 Quick cleanup
-        run: |
-          # Only clean what's necessary
-          docker system prune -f --filter "until=24h" || true
-          pkill -f "dotnet.*Ecom" || true
-
       - name: 🔧 Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
@@ -67,13 +64,12 @@ jobs:
 
       - name: 📦 Restore dependencies
         run: |
-          dotnet restore Moclaw.Ecommerce.sln --verbosity minimal --no-cache
+          dotnet restore Moclaw.Ecommerce.sln --verbosity minimal
 
       - name: 🏗️ Build solution
         run: |
           dotnet build Moclaw.Ecommerce.sln --configuration Release --no-restore --verbosity minimal
 
-      # Optimization: Parallel unit tests if they exist
       - name: 🧪 Run tests
         run: |
           if find . -name "*.Test*.csproj" -o -name "*Test.csproj" | head -1 | grep -q .; then
@@ -86,14 +82,13 @@ jobs:
       - name: 🏷️ Generate metadata
         id: meta
         run: |
-          # Optimization: Use short SHA for faster image operations
           TAG="${{ github.sha }}"
           SHORT_SHA="${TAG:0:8}"
           echo "tags=${SHORT_SHA}" >> $GITHUB_OUTPUT
 
   build-images:
     name: Build Images
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: build-and-test
     if: needs.build-and-test.outputs.should-deploy == 'true'
     strategy:
@@ -106,7 +101,6 @@ jobs:
             dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
             image_name: moclaw/ecom-users-api
       fail-fast: false
-      # Optimization: Build images in parallel but limit concurrency
       max-parallel: 2
 
     steps:
@@ -115,9 +109,6 @@ jobs:
 
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            network=host
 
       - name: 🔐 Login to Docker registry
         uses: docker/login-action@v3
@@ -126,7 +117,6 @@ jobs:
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      # Optimization: Use cache and multi-stage builds
       - name: 🏗️ Build and push ${{ matrix.service.name }}
         uses: docker/build-push-action@v5
         with:
@@ -143,8 +133,8 @@ jobs:
             BUILDKIT_INLINE_CACHE=1
 
   deploy-minikube:
-    name: Deploy
-    runs-on: self-hosted
+    name: Deploy via SSH
+    runs-on: ubuntu-latest
     needs: [build-and-test, build-images]
     if: needs.build-and-test.outputs.should-deploy == 'true'
     
@@ -152,50 +142,83 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      # Optimization: Reuse existing minikube cluster if healthy
-      - name: 🚀 Setup/Reuse Minikube
+      # Setup SSH connection through Cloudflare Tunnel
+      - name: 🔐 Setup SSH
         run: |
-          echo "Checking existing Minikube cluster..."
+          mkdir -p ~/.ssh
+          echo "${{ env.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
           
+          # Add Cloudflare Tunnel host to known_hosts
+          ssh-keyscan -H ${{ env.CF_TUNNEL_HOST }} >> ~/.ssh/known_hosts
+          
+          # Test SSH connection
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} "echo 'SSH connection successful'"
+
+      # Transfer deployment files
+      - name: 📤 Transfer deployment files
+        run: |
+          # Create deployment package
+          tar -czf deployment.tar.gz k8s/ .github/scripts/ || tar -czf deployment.tar.gz k8s/
+          
+          # Transfer to remote server
+          scp -i ~/.ssh/deploy_key deployment.tar.gz ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }}:~/
+          
+          # Extract on remote server
+          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
+            rm -rf ~/deployment
+            mkdir -p ~/deployment
+            tar -xzf ~/deployment.tar.gz -C ~/deployment
+            rm ~/deployment.tar.gz
+          '
+
+      # Remote deployment via SSH
+      - name: 🚀 Deploy to Minikube (Remote)
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} << 'EOF'
+          set -e
+          
+          # Set environment variables
+          export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
+          export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
+          export KUBE_NAMESPACE="${{ env.KUBE_NAMESPACE }}"
+          export KUBECTL_TIMEOUT="${{ env.KUBECTL_TIMEOUT }}"
+          
+          echo "🚀 Starting deployment on remote server..."
+          echo "Core Image: $CORE_IMAGE"
+          echo "Users Image: $USERS_IMAGE"
+          
+          # Check/Start Minikube
+          echo "Checking Minikube status..."
           if minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null; then
-            echo "✅ Existing Minikube cluster is healthy, reusing it"
+            echo "✅ Minikube cluster is healthy"
             MINIKUBE_IP=$(minikube ip)
-            echo "Minikube IP: $MINIKUBE_IP"
           else
-            echo "Starting new Minikube cluster..."
-            
-            # Quick cleanup
+            echo "Starting Minikube cluster..."
             minikube delete 2>/dev/null || true
-            
-            # Optimization: Smaller resource allocation for faster startup
             minikube start \
               --driver=docker \
               --kubernetes-version=v1.28.3 \
               --memory=4096 \
               --cpus=2 \
               --disk-size=15g \
-              --wait=all \
-              --force
+              --wait=all
             
-            # Enable only necessary addons
             minikube addons enable ingress
-            
             kubectl wait --for=condition=Ready nodes --all --timeout=180s
+            MINIKUBE_IP=$(minikube ip)
           fi
-
-      # Optimization: Skip image loading if already present
-      - name: 🔄 Load Docker images
-        run: |
-          CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
-          USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
           
-          echo "Checking if images exist in Minikube..."
+          echo "Minikube IP: $MINIKUBE_IP"
           
-          # Check if images already exist
-          if minikube image ls | grep -q "${{ needs.build-and-test.outputs.image-tag }}"; then
-            echo "✅ Images already loaded in Minikube"
-          else
-            echo "Loading new images..."
+          # Login to Docker registry and pull images
+          echo "Logging into Docker registry..."
+          echo "${{ env.REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u "${{ env.REGISTRY_USERNAME }}" --password-stdin
+          
+          # Pull and load images
+          echo "Loading Docker images..."
+          if ! minikube image ls | grep -q "${{ needs.build-and-test.outputs.image-tag }}"; then
+            echo "Pulling new images..."
             docker pull "$CORE_IMAGE" &
             docker pull "$USERS_IMAGE" &
             wait
@@ -203,37 +226,37 @@ jobs:
             minikube image load "$CORE_IMAGE" &
             minikube image load "$USERS_IMAGE" &
             wait
-          fi
-
-      # Optimization: Smart deployment with rolling updates
-      - name: 🏗️ Deploy Kubernetes resources
-        run: |
-          CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
-          USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
-          
-          # Create namespace if not exists
-          kubectl create namespace ${{ env.KUBE_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Apply configurations in dependency order
-          echo "Applying base configurations..."
-          kubectl apply -f k8s/secrets.yaml -n ${{ env.KUBE_NAMESPACE }}
-          kubectl apply -f k8s/configmap.yaml -n ${{ env.KUBE_NAMESPACE }}
-          
-          # Deploy PostgreSQL first (if not already running)
-          if ! kubectl get deployment postgres -n ${{ env.KUBE_NAMESPACE }} 2>/dev/null; then
-            kubectl apply -f k8s/postgres/deployment.yaml -n ${{ env.KUBE_NAMESPACE }}
+            echo "✅ Images loaded"
+          else
+            echo "✅ Images already present"
           fi
           
-          # Apply services and deployments
-          kubectl apply -f k8s/core-api/ -n ${{ env.KUBE_NAMESPACE }}
-          kubectl apply -f k8s/users-api/ -n ${{ env.KUBE_NAMESPACE }}
+          # Deploy Kubernetes resources
+          echo "Deploying Kubernetes resources..."
+          cd ~/deployment
           
-          # Update images with rolling restart
-          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n ${{ env.KUBE_NAMESPACE }}
-          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n ${{ env.KUBE_NAMESPACE }}
+          # Create namespace
+          kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
           
-          # Optimization: Apply environment fixes only once
-          kubectl patch deployment core-api -n ${{ env.KUBE_NAMESPACE }} --type='merge' -p='{
+          # Apply base configurations
+          kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
+          kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
+          
+          # Deploy PostgreSQL if not exists
+          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE 2>/dev/null; then
+            kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
+          fi
+          
+          # Deploy APIs
+          kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
+          kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
+          
+          # Update images
+          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE
+          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE
+          
+          # Fix environment configurations
+          kubectl patch deployment core-api -n $KUBE_NAMESPACE --type='merge' -p='{
             "spec": {
               "template": {
                 "spec": {
@@ -247,31 +270,41 @@ jobs:
                 }
               }
             }
-          }' || echo "Patch already applied or failed"
-
-      # Optimization: Faster deployment checks
-      - name: ⏳ Wait for deployments
-        run: |
+          }' || echo "Patch already applied"
+          
+          kubectl patch deployment users-api -n $KUBE_NAMESPACE --type='merge' -p='{
+            "spec": {
+              "template": {
+                "spec": {
+                  "containers": [{
+                    "name": "users-api",
+                    "env": [
+                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
+                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
+                    ]
+                  }]
+                }
+              }
+            }
+          }' || echo "Patch already applied"
+          
+          # Wait for deployments
           echo "Waiting for deployments..."
           
-          # Wait for PostgreSQL (only if it's new)
-          if ! kubectl get pods -l app=postgres -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
-            kubectl rollout status deployment/postgres -n ${{ env.KUBE_NAMESPACE }} --timeout=${{ env.KUBECTL_TIMEOUT }}
+          # Wait for PostgreSQL if new
+          if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
+            kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
           fi
           
-          # Wait for APIs in parallel
-          kubectl rollout status deployment/core-api -n ${{ env.KUBE_NAMESPACE }} --timeout=${{ env.KUBECTL_TIMEOUT }} &
-          kubectl rollout status deployment/users-api -n ${{ env.KUBE_NAMESPACE }} --timeout=${{ env.KUBECTL_TIMEOUT }} &
+          # Wait for APIs
+          kubectl rollout status deployment/core-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
+          kubectl rollout status deployment/users-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
           wait
           
           echo "✅ All deployments ready!"
-
-      # Optimization: Quick health check
-      - name: 🩺 Quick health check
-        run: |
-          MINIKUBE_IP=$(minikube ip)
           
-          # Quick connectivity test (max 30 seconds total)
+          # Quick health check
+          echo "Performing health checks..."
           timeout 30s bash -c '
             until curl -s http://'$MINIKUBE_IP':30301/ >/dev/null 2>&1; do 
               echo "Waiting for Core API..."
@@ -285,23 +318,29 @@ jobs:
               sleep 2
             done
           ' && echo "✅ Users API ready" || echo "⚠️ Users API timeout"
-
-      # Optimization: Concise summary
-      - name: 📊 Deployment summary
-        run: |
-          MINIKUBE_IP=$(minikube ip)
+          
+          # Summary
           echo "🚀 Deployment Complete!"
           echo "Core API: http://$MINIKUBE_IP:30301"
           echo "Users API: http://$MINIKUBE_IP:30302"
           echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
           
-          # Show only essential status
-          kubectl get pods -n ${{ env.KUBE_NAMESPACE }} --no-headers | awk '{print $1": "$3}'
+          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print $1": "$3}'
+          
+          EOF
 
-      # Optimization: Minimal cleanup
-      - name: 🧹 Cleanup on failure
+      # Cleanup SSH
+      - name: 🧹 Cleanup SSH
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key
+          
+      # Cleanup on failure
+      - name: 🧹 Remote cleanup on failure
         if: failure()
         run: |
-          echo "Minimal cleanup after failure..."
-          kubectl delete pods --field-selector=status.phase=Failed -n ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
-          docker system prune -f --filter "until=1h" || true
+          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
+            kubectl delete pods --field-selector=status.phase=Failed -n ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
+            docker system prune -f --filter "until=1h" || true
+            rm -rf ~/deployment
+          ' || echo "Remote cleanup failed"
