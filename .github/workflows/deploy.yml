@@ -6,20 +6,15 @@ on:
   workflow_dispatch:
 
 env:
-  DOTNET_VERSION: '9.0'
+  DOTNET_VERSION: "9.0"
   REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
   REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
   REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
   IMAGE_CORE: moclaw/ecom-core-api
   IMAGE_USERS: moclaw/ecom-users-api
   KUBE_NAMESPACE: ecommerce
-  # SSH Connection via Cloudflare Tunnel
   CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
   CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-  CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-  CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-  # Optimization: Use shorter timeouts
   KUBECTL_TIMEOUT: 300s
   HEALTH_CHECK_TIMEOUT: 180s
 
@@ -30,7 +25,7 @@ jobs:
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
       should-deploy: ${{ steps.changes.outputs.should-deploy }}
-    
+
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
@@ -47,7 +42,7 @@ jobs:
             echo "should-deploy=true" >> $GITHUB_OUTPUT
             echo "Main branch - will deploy"
           else
-            if git diff --name-only HEAD~1 HEAD | grep -E "\.(cs|csproj|sln|Dockerfile)$|^k8s/"; then
+            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile)$|^k8s/"; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "Source code changes detected - will deploy"
             else
@@ -92,7 +87,6 @@ jobs:
           TAG="${{ github.sha }}"
           SHORT_SHA="${TAG:0:8}"
           echo "tags=${SHORT_SHA}" >> $GITHUB_OUTPUT
-
   build-images:
     name: Build Images
     runs-on: ubuntu-latest
@@ -138,138 +132,152 @@ jobs:
           cache-to: type=registry,ref=${{ matrix.service.image_name }}:buildcache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
-
   deploy-minikube:
     name: Deploy via SSH
     runs-on: ubuntu-latest
     needs: [build-and-test, build-images]
     if: needs.build-and-test.outputs.should-deploy == 'true'
-    
+
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      # Setup SSH connection through Cloudflare Tunnel
       - name: 🔐 Setup SSH
-        run: |
-          # Write SSH key to file using printf to handle special characters properly
-          printf '%s\n' "$SSH_PRIVATE_KEY" > deploy_key
-          chmod 600 deploy_key
-          
-          # Add Cloudflare Tunnel host to known_hosts
-          ssh-keyscan -H "$CF_TUNNEL_HOST" >> known_hosts
-          
-          # Test SSH connection
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection successful'"
+        shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
           CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-
-      # Transfer deployment files
-      - name: 📤 Transfer deployment files
         run: |
-          # Create deployment package
-          tar -czf deployment.tar.gz k8s/ .github/scripts/ || tar -czf deployment.tar.gz k8s/
-          
-          # Transfer to remote server
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > deploy_key
+          chmod 600 deploy_key
+          ssh-keyscan -H "$CF_TUNNEL_HOST" >> known_hosts
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection successful'"
+
+      - name: 📤 Transfer deployment files
+        env:
+          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
+        run: |
+          tar -czf deployment.tar.gz k8s/ .github/scripts/ 2>/dev/null || tar -czf deployment.tar.gz k8s/
           scp -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no deployment.tar.gz "$CF_TUNNEL_USER@$CF_TUNNEL_HOST":~/
-          
-          # Extract on remote server
           ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
             rm -rf ~/deployment
             mkdir -p ~/deployment
             tar -xzf ~/deployment.tar.gz -C ~/deployment
             rm ~/deployment.tar.gz
           '
+
+      - name: 🚀 Deploy to Minikube (Remote)
         env:
           CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
           CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-
-      # Remote deployment via SSH
-      - name: 🚀 Deploy to Minikube (Remote)
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
           ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'EOF'
           set -e
-          
-          # Set environment variables
-          export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}"
-          export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}"
+
+          # Export variables for remote execution
+          export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ env.IMAGE_TAG }}"
+          export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ env.IMAGE_TAG }}"
           export KUBE_NAMESPACE="${{ env.KUBE_NAMESPACE }}"
           export KUBECTL_TIMEOUT="${{ env.KUBECTL_TIMEOUT }}"
-          
+          export REGISTRY_URL="${{ env.REGISTRY_URL }}"
+          export REGISTRY_USERNAME="${{ env.REGISTRY_USERNAME }}"
+          export REGISTRY_PASSWORD="${{ env.REGISTRY_PASSWORD }}"
+
           echo "🚀 Starting deployment on remote server..."
           echo "Core Image: $CORE_IMAGE"
           echo "Users Image: $USERS_IMAGE"
-          
-          # Check/Start Minikube
+
+          # Function for retry logic
+          retry_command() {
+            local max_attempts=3
+            local attempt=1
+            local command="$1"
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts: $command"
+              if eval "$command"; then
+                return 0
+              fi
+              attempt=$((attempt + 1))
+              [ $attempt -le $max_attempts ] && sleep 10
+            done
+            echo "Command failed after $max_attempts attempts: $command"
+            return 1
+          }
+
+          # Check/Start Minikube with retry
           echo "Checking Minikube status..."
-          if minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null; then
-            echo "✅ Minikube cluster is healthy"
-            MINIKUBE_IP=$(minikube ip)
-          else
+          if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
             echo "Starting Minikube cluster..."
             minikube delete 2>/dev/null || true
-            minikube start \
-              --driver=docker \
-              --kubernetes-version=v1.28.3 \
-              --memory=4096 \
-              --cpus=2 \
-              --disk-size=15g \
-              --wait=all
-            
+            retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
             minikube addons enable ingress
             kubectl wait --for=condition=Ready nodes --all --timeout=180s
-            MINIKUBE_IP=$(minikube ip)
           fi
-          
+
+          MINIKUBE_IP=$(minikube ip)
           echo "Minikube IP: $MINIKUBE_IP"
-          
-          # Login to Docker registry and pull images
+
+          # Login to Docker registry
           echo "Logging into Docker registry..."
-          echo "${{ env.REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY_URL }} -u "${{ env.REGISTRY_USERNAME }}" --password-stdin
-          
-          # Pull and load images
-          echo "Loading Docker images..."
-          if ! minikube image ls | grep -q "${{ needs.build-and-test.outputs.image-tag }}"; then
-            echo "Pulling new images..."
-            docker pull "$CORE_IMAGE" &
-            docker pull "$USERS_IMAGE" &
-            wait
-            
+          echo "$REGISTRY_PASSWORD" | docker login $REGISTRY_URL -u "$REGISTRY_USERNAME" --password-stdin
+
+          # Optimized image handling
+          echo "Managing Docker images..."
+
+          # Check if images exist locally first
+          if ! docker image inspect "$CORE_IMAGE" >/dev/null 2>&1; then
+            echo "Pulling Core API image..."
+            retry_command "docker pull $CORE_IMAGE"
+          fi
+
+          if ! docker image inspect "$USERS_IMAGE" >/dev/null 2>&1; then
+            echo "Pulling Users API image..."
+            retry_command "docker pull $USERS_IMAGE"
+          fi
+
+          # Load images to minikube efficiently
+          if ! minikube image ls | grep -q "${{ env.IMAGE_TAG }}"; then
+            echo "Loading images to Minikube..."
             minikube image load "$CORE_IMAGE" &
             minikube image load "$USERS_IMAGE" &
             wait
-            echo "✅ Images loaded"
+            echo "✅ Images loaded to Minikube"
           else
-            echo "✅ Images already present"
+            echo "✅ Images already present in Minikube"
           fi
-          
-          # Deploy Kubernetes resources
+
+          # Deploy Kubernetes resources with better error handling
           echo "Deploying Kubernetes resources..."
           cd ~/deployment
-          
+
           # Create namespace
           kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Apply base configurations
-          kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
-          kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
-          
+
+          # Apply configurations
+          [ -f k8s/secrets.yaml ] && kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
+          [ -f k8s/configmap.yaml ] && kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
+
           # Deploy PostgreSQL if not exists
-          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE 2>/dev/null; then
-            kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
+          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
+            [ -f k8s/postgres/deployment.yaml ] && kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
           fi
-          
+
           # Deploy APIs
-          kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
-          kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
-          
+          [ -d k8s/core-api ] && kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
+          [ -d k8s/users-api ] && kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
+
           # Update images
-          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE
-          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE
-          
-          # Fix environment configurations
+          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE --record
+          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE --record
+
+          # Apply environment patches
           kubectl patch deployment core-api -n $KUBE_NAMESPACE --type='merge' -p='{
             "spec": {
               "template": {
@@ -284,8 +292,8 @@ jobs:
                 }
               }
             }
-          }' || echo "Patch already applied"
-          
+          }' 2>/dev/null || echo "Core API patch already applied"
+
           kubectl patch deployment users-api -n $KUBE_NAMESPACE --type='merge' -p='{
             "spec": {
               "template": {
@@ -300,71 +308,88 @@ jobs:
                 }
               }
             }
-          }' || echo "Patch already applied"
-          
-          # Wait for deployments
-          echo "Waiting for deployments..."
-          
-          # Wait for PostgreSQL if new
-          if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
-            kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
+          }' 2>/dev/null || echo "Users API patch already applied"
+
+          # Wait for deployments with improved monitoring
+          echo "Waiting for deployments to be ready..."
+
+          # Wait for PostgreSQL first
+          if kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
+            if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
+              kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
+            fi
           fi
-          
-          # Wait for APIs
+
+          # Wait for APIs in parallel
           kubectl rollout status deployment/core-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
+          CORE_PID=$!
           kubectl rollout status deployment/users-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
-          wait
-          
-          echo "✅ All deployments ready!"
-          
-          # Quick health check
+          USERS_PID=$!
+
+          # Wait for both deployments
+          wait $CORE_PID && echo "✅ Core API deployment ready" || echo "❌ Core API deployment failed"
+          wait $USERS_PID && echo "✅ Users API deployment ready" || echo "❌ Users API deployment failed"
+
+          echo "✅ All deployments processed!"
+
+          # Enhanced health checks with proper error handling
           echo "Performing health checks..."
-          timeout 30s bash -c '
-            until curl -s http://'$MINIKUBE_IP':30301/ >/dev/null 2>&1; do 
-              echo "Waiting for Core API..."
-              sleep 2
+
+          health_check() {
+            local url=$1
+            local service_name=$2
+            local max_attempts=15
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              if curl -s --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
+                echo "✅ $service_name is healthy"
+                return 0
+              fi
+              echo "Waiting for $service_name... (attempt $attempt/$max_attempts)"
+              sleep 10
+              attempt=$((attempt + 1))
             done
-          ' && echo "✅ Core API ready" || echo "⚠️ Core API timeout"
-          
-          timeout 30s bash -c '
-            until curl -s http://'$MINIKUBE_IP':30302/ >/dev/null 2>&1; do 
-              echo "Waiting for Users API..."
-              sleep 2
-            done
-          ' && echo "✅ Users API ready" || echo "⚠️ Users API timeout"
-          
-          # Summary
+            echo "⚠️ $service_name health check timeout"
+            return 1
+          }
+
+          health_check "http://$MINIKUBE_IP:30301/" "Core API" &
+          health_check "http://$MINIKUBE_IP:30302/" "Users API" &
+          wait
+
+          # Final status report
+          echo ""
           echo "🚀 Deployment Complete!"
+          echo "=================================="
           echo "Core API: http://$MINIKUBE_IP:30301"
           echo "Users API: http://$MINIKUBE_IP:30302"
-          echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
-          
-          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print $1": "$3}'
-          
-          EOF
-        env:
-          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          echo "Image Tag: ${{ env.IMAGE_TAG }}"
+          echo ""
+          echo "Pod Status:"
+          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print "  " $1": "$3}'
 
-      # Cleanup SSH
+          # Cleanup old images to save space
+          docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
+
+          EOF
+
       - name: 🧹 Cleanup SSH
         if: always()
         run: |
           rm -f deploy_key known_hosts
-          
-      # Cleanup on failure
+
       - name: 🧹 Remote cleanup on failure
         if: failure()
-        run: |
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
-            kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
-            docker system prune -f --filter "until=1h" || true
-            rm -rf ~/deployment
-          ' || echo "Remote cleanup failed"
         env:
           CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
           CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
           KUBE_NAMESPACE: ${{ env.KUBE_NAMESPACE }}
+        run: |
+          if [ -f deploy_key ]; then
+            ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
+              kubectl delete pods --field-selector=status.phase=Failed -n '"$KUBE_NAMESPACE"' --ignore-not-found=true
+              docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
+              rm -rf ~/deployment
+            ' || echo "Remote cleanup failed"
+          fi
