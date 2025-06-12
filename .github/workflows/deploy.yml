@@ -149,24 +149,114 @@ jobs:
           CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
           CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
         run: |
-          echo "$SSH_PRIVATE_KEY" | tr -d '\r' > deploy_key
+          # Create SSH directory if it doesn't exist
+          mkdir -p ~/.ssh
+          
+          # Clean and prepare SSH key
+          echo "$SSH_PRIVATE_KEY" | tr -d '\r' | sed '/^$/d' > deploy_key
+          
+          # Validate SSH key format
+          if ! ssh-keygen -l -f deploy_key >/dev/null 2>&1; then
+            echo "❌ Invalid SSH private key format"
+            echo "Key preview (first 50 chars): $(head -c 50 deploy_key)..."
+            exit 1
+          fi
+          
           chmod 600 deploy_key
-          ssh-keyscan -H "$CF_TUNNEL_HOST" >> known_hosts
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection successful'"
+          
+          # Add host to known_hosts with retries
+          echo "Adding host to known_hosts..."
+          for i in {1..3}; do
+            if ssh-keyscan -H -T 10 "$CF_TUNNEL_HOST" >> known_hosts 2>/dev/null; then
+              echo "✅ Host key added successfully"
+              break
+            fi
+            echo "Attempt $i failed, retrying..."
+            sleep 5
+          done
+          
+          # Verify known_hosts file
+          if [ ! -s known_hosts ]; then
+            echo "❌ Failed to get host key, trying direct connection..."
+            # Fallback: accept host key on first connection
+            touch known_hosts
+          fi
+          
+          # Test SSH connection with detailed output
+          echo "Testing SSH connection..."
+          if ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=10 -o StrictHostKeyChecking=no -v "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection test successful'" 2>&1; then
+            echo "✅ SSH connection established successfully"
+          else
+            echo "❌ SSH connection failed, checking connectivity..."
+            # Additional debugging
+            echo "Checking host resolution..."
+            nslookup "$CF_TUNNEL_HOST" || echo "DNS resolution failed"
+            echo "Checking connectivity..."
+            timeout 10 nc -zv "$CF_TUNNEL_HOST" 22 || echo "Port 22 not accessible"
+            exit 1
+          fi
 
       - name: 📤 Transfer deployment files
         env:
           CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
           CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
         run: |
-          tar -czf deployment.tar.gz k8s/ .github/scripts/ 2>/dev/null || tar -czf deployment.tar.gz k8s/
-          scp -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no deployment.tar.gz "$CF_TUNNEL_USER@$CF_TUNNEL_HOST":~/
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
+          # Create deployment archive with better error handling
+          echo "Creating deployment archive..."
+          if [ -d "k8s" ]; then
+            if [ -d ".github/scripts" ]; then
+              tar -czf deployment.tar.gz k8s/ .github/scripts/
+            else
+              tar -czf deployment.tar.gz k8s/
+            fi
+          else
+            echo "❌ No k8s directory found"
+            exit 1
+          fi
+          
+          # Verify archive was created
+          if [ ! -f deployment.tar.gz ]; then
+            echo "❌ Failed to create deployment archive"
+            exit 1
+          fi
+          
+          echo "Archive size: $(du -h deployment.tar.gz | cut -f1)"
+          
+          # Transfer with retry logic
+          echo "Transferring deployment files..."
+          for i in {1..3}; do
+            if scp -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=30 deployment.tar.gz "$CF_TUNNEL_USER@$CF_TUNNEL_HOST":~/; then
+              echo "✅ File transfer successful"
+              break
+            else
+              echo "Transfer attempt $i failed"
+              if [ $i -eq 3 ]; then
+                echo "❌ All transfer attempts failed"
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+          
+          # Extract files on remote server with verification
+          echo "Extracting files on remote server..."
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'EXTRACT_EOF'
+            set -e
+            echo "Cleaning previous deployment..."
             rm -rf ~/deployment
             mkdir -p ~/deployment
-            tar -xzf ~/deployment.tar.gz -C ~/deployment
-            rm ~/deployment.tar.gz
-          '
+            
+            echo "Extracting archive..."
+            if tar -xzf ~/deployment.tar.gz -C ~/deployment; then
+              echo "✅ Extraction successful"
+              rm ~/deployment.tar.gz
+              echo "Deployment directory contents:"
+              ls -la ~/deployment/
+            else
+              echo "❌ Extraction failed"
+              exit 1
+            fi
+          EXTRACT_EOF
 
       - name: 🚀 Deploy to Minikube (Remote)
         env:
@@ -177,10 +267,14 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'EOF'
+          # Execute deployment with better error handling and connection management
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'DEPLOY_EOF'
           set -e
-
-          # Export variables for remote execution
+          
+          # Set error handling
+          trap 'echo "❌ Deployment failed at line $LINENO"' ERR
+          
+          # Export variables for remote execution with validation
           export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ env.IMAGE_TAG }}"
           export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ env.IMAGE_TAG }}"
           export KUBE_NAMESPACE="${{ env.KUBE_NAMESPACE }}"
@@ -188,10 +282,19 @@ jobs:
           export REGISTRY_URL="${{ env.REGISTRY_URL }}"
           export REGISTRY_USERNAME="${{ env.REGISTRY_USERNAME }}"
           export REGISTRY_PASSWORD="${{ env.REGISTRY_PASSWORD }}"
+          
+          # Validate required variables
+          for var in CORE_IMAGE USERS_IMAGE KUBE_NAMESPACE KUBECTL_TIMEOUT REGISTRY_URL REGISTRY_USERNAME REGISTRY_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              echo "❌ Required variable $var is not set"
+              exit 1
+            fi
+          done
 
           echo "🚀 Starting deployment on remote server..."
           echo "Core Image: $CORE_IMAGE"
           echo "Users Image: $USERS_IMAGE"
+          echo "Namespace: $KUBE_NAMESPACE"
 
           # Function for retry logic
           retry_command() {
