@@ -152,14 +152,19 @@ jobs:
       # Setup SSH connection through Cloudflare Tunnel
       - name: 🔐 Setup SSH
         run: |
-          echo "${{ env.SSH_PRIVATE_KEY }}" | tr -d '\r' > deploy_key
+          # Write SSH key to file using printf to handle special characters properly
+          printf '%s\n' "$SSH_PRIVATE_KEY" > deploy_key
           chmod 600 deploy_key
           
           # Add Cloudflare Tunnel host to known_hosts
-          ssh-keyscan -H ${{ env.CF_TUNNEL_HOST }} >> known_hosts
+          ssh-keyscan -H "$CF_TUNNEL_HOST" >> known_hosts
           
           # Test SSH connection
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} "echo 'SSH connection successful'"
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection successful'"
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
 
       # Transfer deployment files
       - name: 📤 Transfer deployment files
@@ -168,20 +173,23 @@ jobs:
           tar -czf deployment.tar.gz k8s/ .github/scripts/ || tar -czf deployment.tar.gz k8s/
           
           # Transfer to remote server
-          scp -i deploy_key -o UserKnownHostsFile=known_hosts deployment.tar.gz ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }}:~/
+          scp -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no deployment.tar.gz "$CF_TUNNEL_USER@$CF_TUNNEL_HOST":~/
           
           # Extract on remote server
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
             rm -rf ~/deployment
             mkdir -p ~/deployment
             tar -xzf ~/deployment.tar.gz -C ~/deployment
             rm ~/deployment.tar.gz
           '
+        env:
+          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
 
       # Remote deployment via SSH
       - name: 🚀 Deploy to Minikube (Remote)
         run: |
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} << 'EOF'
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'EOF'
           set -e
           
           # Set environment variables
@@ -334,6 +342,12 @@ jobs:
           kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print $1": "$3}'
           
           EOF
+        env:
+          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
 
       # Cleanup SSH
       - name: 🧹 Cleanup SSH
@@ -345,8 +359,12 @@ jobs:
       - name: 🧹 Remote cleanup on failure
         if: failure()
         run: |
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
-            kubectl delete pods --field-selector=status.phase=Failed -n ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
+            kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
             docker system prune -f --filter "until=1h" || true
             rm -rf ~/deployment
           ' || echo "Remote cleanup failed"
+        env:
+          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
+          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
+          KUBE_NAMESPACE: ${{ env.KUBE_NAMESPACE }}
