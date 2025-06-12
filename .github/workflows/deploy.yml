@@ -152,15 +152,14 @@ jobs:
       # Setup SSH connection through Cloudflare Tunnel
       - name: 🔐 Setup SSH
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ env.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
+          echo "${{ env.SSH_PRIVATE_KEY }}" | tr -d '\r' > deploy_key
+          chmod 600 deploy_key
           
           # Add Cloudflare Tunnel host to known_hosts
-          ssh-keyscan -H ${{ env.CF_TUNNEL_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ env.CF_TUNNEL_HOST }} >> known_hosts
           
           # Test SSH connection
-          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} "echo 'SSH connection successful'"
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=10 ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} "echo 'SSH connection successful'"
 
       # Transfer deployment files
       - name: 📤 Transfer deployment files
@@ -169,10 +168,10 @@ jobs:
           tar -czf deployment.tar.gz k8s/ .github/scripts/ || tar -czf deployment.tar.gz k8s/
           
           # Transfer to remote server
-          scp -i ~/.ssh/deploy_key deployment.tar.gz ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }}:~/
+          scp -i deploy_key -o UserKnownHostsFile=known_hosts deployment.tar.gz ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }}:~/
           
           # Extract on remote server
-          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
             rm -rf ~/deployment
             mkdir -p ~/deployment
             tar -xzf ~/deployment.tar.gz -C ~/deployment
@@ -182,7 +181,7 @@ jobs:
       # Remote deployment via SSH
       - name: 🚀 Deploy to Minikube (Remote)
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} << 'EOF'
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} << 'EOF'
           set -e
           
           # Set environment variables
@@ -340,13 +339,13 @@ jobs:
       - name: 🧹 Cleanup SSH
         if: always()
         run: |
-          rm -f ~/.ssh/deploy_key
+          rm -f deploy_key known_hosts
           
       # Cleanup on failure
       - name: 🧹 Remote cleanup on failure
         if: failure()
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
+          ssh -i deploy_key -o UserKnownHostsFile=known_hosts ${{ env.CF_TUNNEL_USER }}@${{ env.CF_TUNNEL_HOST }} '
             kubectl delete pods --field-selector=status.phase=Failed -n ${{ env.KUBE_NAMESPACE }} --ignore-not-found=true
             docker system prune -f --filter "until=1h" || true
             rm -rf ~/deployment
