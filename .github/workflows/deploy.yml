@@ -265,13 +265,13 @@ jobs:
             echo "✅ Deployment completed successfully!"
             echo "🌐 Services are available at:"
             echo "  - Gateway API: http://localhost:5300"
-            echo "  - Core API: http://localhost:5301"
-            echo "  - Users API: http://localhost
-            echo "📋 Container logs for debugging:"
-            docker compose logs --tail=20 || true
-            return 1
-          }
-
+            echo "  - Core API: http://localhost:5301" 
+            echo "  - Users API: http://localhost:5302"
+          else
+            echo "❌ Deployment failed!"
+            echo "🧹 Resources have been cleaned up automatically"
+            echo "🔍 Check the deployment logs for details"
+          fi
           # Check each service with Docker-aware health checks
           check_service 5300 "Gateway-API" &
           check_service 5301 "Core-API" &

@@ -6,21 +6,12 @@ services:
       dockerfile: Ecom.Gateway/src/Ecom.Gateway.API/Dockerfile
     ports:
       - "5300:8080"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=http://+:8080
-      - ASPNETCORE_LOGGING__LOGLEVEL__DEFAULT=Information
     depends_on:
       - ecom.core.api
       - ecom.users.api
     networks:
       - ecommerce-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   ecom.core.api:
     image: ${DOCKER_REGISTRY-}ecomcoreapi
@@ -29,18 +20,10 @@ services:
       dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
     ports:
       - "5301:8080"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=http://+:8080
-      - ASPNETCORE_LOGGING__LOGLEVEL__DEFAULT=Information
     networks:
       - ecommerce-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+   
 
   ecom.users.api:
     image: ${DOCKER_REGISTRY-}ecomusersapi
@@ -49,55 +32,7 @@ services:
       dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
     ports:
       - "5302:8080"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
-      - ASPNETCORE_URLS=http://+:8080
-      - ASPNETCORE_LOGGING__LOGLEVEL__DEFAULT=Information
     networks:
       - ecommerce-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    networks:
-      - ecommerce-network
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-      - GF_USERS_ALLOW_SIGN_UP=false
-    networks:
-      - ecommerce-network
-    restart: unless-stopped
-
-networks:
-  ecommerce-network:
-    driver: bridge
-
-volumes:
-  prometheus-data:
-  grafana-data:
+   
