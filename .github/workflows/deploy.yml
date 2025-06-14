@@ -1,254 +1,118 @@
-name: CI/CD Pipeline - Ecommerce Platform
+name: Self-Hosted CI/CD - Ecommerce Platform
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 env:
   DOTNET_VERSION: "9.0"
-  REGISTRY_URL: ${{ secrets.REGISTRY_URL || 'docker.io' }}
-  REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-  REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-  IMAGE_GATEWAY: ecomgatewayapi
-  IMAGE_CORE: ecomcoreapi
-  IMAGE_USERS: ecomusersapi
+  PROJECT_PATH: "/Users/lammoc/Project/Moclaw.Ecommerce"
+  DOCKER_COMPOSE_FILE: "docker-compose.yml"
   HEALTH_CHECK_TIMEOUT: 300s
 
 jobs:
   build-and-test:
-    name: Build & Test
-    runs-on: ubuntu-latest
+    name: Build and Test
+    runs-on: self-hosted
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      should-deploy: ${{ steps.changes.outputs.should-deploy }}
-
+      image-tag: ${{ steps.set-tag.outputs.tag }}
+    
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: 🔍 Check for changes
-        id: changes
+          fetch-depth: 1
+          path: ${{ env.PROJECT_PATH }}
+      
+      - name: 📂 Navigate to project directory
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should-deploy=true" >> $GITHUB_OUTPUT
-            echo "Manual trigger - will deploy"
-          elif [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/develop" ]; then
-            echo "should-deploy=true" >> $GITHUB_OUTPUT
-            echo "Main/Develop branch - will deploy"
-          else
-            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile|yml|yaml|json)$"; then
-              echo "should-deploy=true" >> $GITHUB_OUTPUT
-              echo "Source code changes detected - will deploy"
-            else
-              echo "should-deploy=false" >> $GITHUB_OUTPUT
-              echo "No significant changes - skipping deployment"
-            fi
-          fi
-
+          cd ${{ env.PROJECT_PATH }}
+          echo "Working directory: $(pwd)"
+      
       - name: 🔧 Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: 📦 Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+        run: |
+          # Check if .NET SDK is installed, if not, display message
+          if ! command -v dotnet &> /dev/null; then
+            echo "⚠️ .NET SDK not found. Please install .NET ${{ env.DOTNET_VERSION }} on the self-hosted runner."
+            exit 1
+          fi
+          
+          # Display installed version
+          dotnet --info | grep "Version"
 
       - name: 📦 Restore dependencies
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           dotnet restore Moclaw.Ecommerce.sln --verbosity minimal
 
       - name: 🏗️ Build solution
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           dotnet build Moclaw.Ecommerce.sln --configuration Release --no-restore --verbosity minimal
 
-      - name: 🧪 Run tests
+      - name: 🧪 Run tests (if available)
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           echo "🔍 Searching for test projects..."
           if find . -name "*Test*.csproj" -o -name "*Tests.csproj" | head -1 | grep -q .; then
             echo "✅ Test projects found, running tests..."
-            dotnet test Moclaw.Ecommerce.sln --configuration Release --no-build --verbosity minimal --logger trx --results-directory ./TestResults
+            dotnet test Moclaw.Ecommerce.sln --configuration Release --no-build --verbosity minimal
           else
             echo "⚠️ No test projects found, skipping tests"
           fi
-
-      - name: 🏷️ Generate metadata
-        id: meta
+      
+      - name: 🏷️ Set image tag
+        id: set-tag
         run: |
-          TAG="${{ github.sha }}"
-          SHORT_SHA="${TAG:0:8}"
-          echo "tags=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          TAG=$(date +%Y%m%d%H%M%S)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Set image tag to: $TAG"
 
-  build-images:
-    name: Build Images
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    if: needs.build-and-test.outputs.should-deploy == 'true'
-    strategy:
-      matrix:
-        service:
-          - name: gateway-api
-            dockerfile: Ecom.Gateway/src/Ecom.Gateway.API/Dockerfile
-            image_name: ecomgatewayapi
-          - name: core-api
-            dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
-            image_name: ecomcoreapi
-          - name: users-api
-            dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
-            image_name: ecomusersapi
-      fail-fast: false
-      max-parallel: 3
-
+  deploy:
+    name: Deploy Application
+    runs-on: self-hosted
+    needs: [build-and-test]
+    
     steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v4
-
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔐 Login to Docker registry
-        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY_URL }}
-          username: ${{ env.REGISTRY_USERNAME }}
-          password: ${{ env.REGISTRY_PASSWORD }}
-
-      - name: ℹ️ Registry info
-        run: |
-          if [ -n "${{ env.REGISTRY_USERNAME }}" ] && [ -n "${{ env.REGISTRY_PASSWORD }}" ]; then
-            echo "✅ Registry credentials available - will push images"
-            echo "Registry: ${{ env.REGISTRY_URL }}"
-            echo "Username: ${{ env.REGISTRY_USERNAME }}"
-            echo "Image will be tagged as: ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}"
-          else
-            echo "⚠️ No registry credentials - will only build locally"
-          fi
-
-      - name: 🏗️ Build and push ${{ matrix.service.name }}
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ matrix.service.dockerfile }}
-          push: ${{ env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != '' }}
-          tags: |
-            ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
-            ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:latest
-          platforms: linux/amd64
-          cache-from: type=registry,ref=${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:buildcache,mode=max
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-
-  deploy-local:
-    name: Deploy to Local Environment
-    runs-on: ubuntu-latest
-    needs: [build-and-test, build-images]
-    if: needs.build-and-test.outputs.should-deploy == 'true'
-
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v4
-
-      - name: 🔐 Login to Docker registry
-        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY_URL }}
-          username: ${{ env.REGISTRY_USERNAME }}
-          password: ${{ env.REGISTRY_PASSWORD }}
-
       - name: 🧹 Clean up existing containers
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           echo "🧹 Cleaning up existing containers..."
           docker compose down --remove-orphans || true
           docker container prune -f || true
           docker network prune -f || true
 
-      - name: 📥 Pull Docker images
-        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
-        run: |
-          echo "📥 Pulling latest images from registry..."
-          IMAGE_TAG="${{ needs.build-and-test.outputs.image-tag }}"
-          
-          # Pull images if they exist in registry
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG} || echo "⚠️ Gateway image not found in registry"
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG} || echo "⚠️ Core image not found in registry"
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG} || echo "⚠️ Users image not found in registry"
-          
-          # Also pull latest tags
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:latest || echo "⚠️ Gateway latest image not found"
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:latest || echo "⚠️ Core latest image not found"
-          docker pull ${{ env.REGISTRY_USERNAME }}/ecomusersapi:latest || echo "⚠️ Users latest image not found"
-
-      - name: � Setup monitoring configuration
-        run: |
-          mkdir -p monitoring
-          if [ ! -f "monitoring/prometheus.yml" ]; then
-            cat > monitoring/prometheus.yml << 'EOF'
-          global:
-            scrape_interval: 15s
-            evaluation_interval: 15s
-
-          scrape_configs:
-            - job_name: 'prometheus'
-              static_configs:
-                - targets: ['localhost:9090']
-            
-            - job_name: 'ecom-gateway'
-              static_configs:
-                - targets: ['ecom.gateway.api:8080']
-              metrics_path: '/metrics'
-              
-            - job_name: 'ecom-core'
-              static_configs:
-                - targets: ['ecom.core.api:8080']
-              metrics_path: '/metrics'
-              
-            - job_name: 'ecom-users'
-              static_configs:
-                - targets: ['ecom.users.api:8080']
-              metrics_path: '/metrics'
-          EOF
-          fi
-
-      - name: 🚀 Deploy with Docker Compose
+      - name: 🐳 Build and deploy with Docker Compose
+        working-directory: ${{ env.PROJECT_PATH }}
         env:
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
-          DOCKER_REGISTRY: ${{ env.REGISTRY_USERNAME && format('{0}/', env.REGISTRY_USERNAME) || '' }}
+          DOCKER_REGISTRY: ${{ secrets.REGISTRY_USERNAME && format('{0}/', secrets.REGISTRY_USERNAME) || '' }}
         run: |
           echo "🚀 Starting Docker deployment..."
           echo "Image Tag: $IMAGE_TAG"
           echo "Registry: $DOCKER_REGISTRY"
-          echo "Registry Username: ${{ env.REGISTRY_USERNAME }}"
-
+          
           # Set environment variables for docker-compose
           export DOCKER_REGISTRY="${DOCKER_REGISTRY}"
           export IMAGE_TAG="${IMAGE_TAG}"
 
           # Create override file with specific image tags if registry is available
-          if [ -n "${{ env.REGISTRY_USERNAME }}" ] && [ -n "$IMAGE_TAG" ]; then
+          if [ -n "${{ secrets.REGISTRY_USERNAME }}" ] && [ -n "$IMAGE_TAG" ]; then
             echo "✅ Using registry images with tag: $IMAGE_TAG"
             cat > docker-compose.override.yml << EOF
           version: '3.8'
           services:
             ecom.gateway.api:
-              image: ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG}
+              image: ${{ secrets.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG}
               build: null
             ecom.core.api:
-              image: ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG}
+              image: ${{ secrets.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG}
               build: null
             ecom.users.api:
-              image: ${{ env.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG}
+              image: ${{ secrets.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG}
               build: null
           EOF
             echo "📋 Override file created:"
@@ -263,12 +127,14 @@ jobs:
             docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
           else
             echo "🏗️ Building and deploying locally..."
-            docker compose up -d --build
+            docker compose build --no-cache
+            docker compose up -d
           fi
-
+          
           echo "✅ Docker deployment initiated"
 
       - name: ⏳ Wait for services to be ready
+        working-directory: ${{ env.PROJECT_PATH }}
         run: |
           echo "⏳ Waiting for Docker services to start..."
           sleep 15
@@ -307,6 +173,101 @@ jobs:
             
             echo "❌ $name health check timeout on port $port"
             echo "📋 Container logs for debugging:"
+            docker compose logs --tail=20 "$name" || true
+            return 1
+          }
+
+          # Check each service with Docker-aware health checks
+          check_service 5300 "ecom.gateway.api" 
+          check_service 5301 "ecom.core.api" 
+          check_service 5302 "ecom.users.api"
+          
+          echo "✅ All services health checks completed"
+
+      - name: 📊 Show deployment status
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          echo "🎉 Deployment completed!"
+          echo "===================="
+          echo "Services:"
+          docker compose ps
+          echo ""
+          echo "Service URLs:"
+          echo "- Gateway API: http://localhost:5300"
+          echo "- Core API: http://localhost:5301"
+          echo "- Users API: http://localhost:5302"
+
+      - name: 🧹 Cleanup on failure
+        if: failure()
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          echo "❌ Deployment failed, cleaning up..."
+          docker compose logs --tail=50
+          docker compose down --volumes --remove-orphans || true
+          docker container prune -f || true
+
+  cleanup:
+    name: Post-deployment Cleanup
+    runs-on: self-hosted
+    needs: [deploy]
+    if: always()
+
+    steps:
+      - name: 🧹 Clean up old Docker resources
+        run: |
+          echo "🧹 Starting post-deployment cleanup..."
+
+          # Clean up old Docker images (keep last 3 versions)
+          echo "🖼️ Cleaning up old images..."
+          docker image prune -f --filter "until=24h" || true
+          docker builder prune -f --filter "until=24h" || true
+
+          # Clean up unused volumes
+          echo "💾 Cleaning up unused volumes..."
+          docker volume prune -f || true
+
+          # Clean up unused networks
+          echo "🌐 Cleaning up unused networks..."
+          docker network prune -f || true
+
+          # Clean up temporary files
+          echo "📁 Cleaning up temporary files..."
+          rm -f docker-compose.override.yml || true
+
+          # Show final system status
+          echo "📊 Final system status:"
+          echo "Docker system usage:"
+          docker system df || true
+          echo ""
+          echo "Active containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+          
+          echo "✅ Post-deployment cleanup completed"
+
+  notify-status:
+    name: Notify Deployment Status
+    runs-on: self-hosted
+    needs: [build-and-test, deploy, cleanup]
+    if: always()
+
+    steps:
+      - name: 📢 Deployment Status Summary
+        run: |
+          echo "🚀 Deployment Pipeline Summary"
+          echo "=============================="
+          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Deploy: ${{ needs.deploy.result }}"
+          echo "Cleanup: ${{ needs.cleanup.result }}"
+          echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
+          echo ""
+
+          if [ "${{ needs.deploy.result }}" = "success" ]; then
+            echo "✅ Deployment completed successfully!"
+            echo "🌐 Services are available at:"
+            echo "  - Gateway API: http://localhost:5300"
+            echo "  - Core API: http://localhost:5301"
+            echo "  - Users API: http://localhost
+            echo "📋 Container logs for debugging:"
             docker compose logs --tail=20 || true
             return 1
           }
@@ -332,78 +293,3 @@ jobs:
           echo "- Gateway API: http://localhost:5300"
           echo "- Core API: http://localhost:5301"
           echo "- Users API: http://localhost:5302"
-          echo "- Prometheus: http://localhost:9090"
-          echo "- Grafana: http://localhost:3000"
-
-      - name: 🧹 Cleanup on failure
-        if: failure()
-        run: |
-          echo "❌ Deployment failed, cleaning up..."
-          docker-compose logs --tail=50
-          docker-compose down --remove-orphans || true
-          docker container prune -f || true
-
-  post-deploy-cleanup:
-    name: Post-deployment Cleanup
-    runs-on: ubuntu-latest
-    needs: [deploy-local]
-    if: always()
-
-    steps:
-      - name: 🧹 Post-deployment cleanup
-        run: |
-          echo "🧹 Starting post-deployment cleanup..."
-
-          # Clean up old Docker images (keep last 3 versions)
-          echo "🖼️ Cleaning up old images..."
-          docker image prune -f --filter "until=24h" || true
-          docker builder prune -f --filter "until=24h" || true
-
-          # Clean up unused networks (keep active ones)
-          echo "🌐 Cleaning up unused networks..."
-          docker network prune -f || true
-
-          # Clean up temporary files
-          echo "📁 Cleaning up temporary files..."
-          rm -f docker-compose.override.yml || true
-
-          # Show final system status
-          echo "📊 Final system status:"
-          echo "Docker system usage:"
-          docker system df || true
-          echo ""
-          echo "Active containers:"
-          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
-
-          echo "✅ Post-deployment cleanup completed"
-
-  notify-status:
-    name: Notify Deployment Status
-    runs-on: ubuntu-latest
-    needs: [build-and-test, deploy-local, post-deploy-cleanup]
-    if: always()
-
-    steps:
-      - name: 📢 Deployment Status Summary
-        run: |
-          echo "🚀 Deployment Pipeline Summary"
-          echo "=============================="
-          echo "Build & Test: ${{ needs.build-and-test.result }}"
-          echo "Deploy: ${{ needs.deploy-local.result }}"
-          echo "Cleanup: ${{ needs.post-deploy-cleanup.result }}"
-          echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
-          echo ""
-
-          if [ "${{ needs.deploy-local.result }}" = "success" ]; then
-            echo "✅ Deployment completed successfully!"
-            echo "🌐 Services are available at:"
-            echo "  - Gateway API: http://localhost:5300"
-            echo "  - Core API: http://localhost:5301"
-            echo "  - Users API: http://localhost:5302"
-            echo "  - Prometheus: http://localhost:9090"
-            echo "  - Grafana: http://localhost:3000"
-          else
-            echo "❌ Deployment failed!"
-            echo "🧹 Resources have been cleaned up automatically"
-            echo "🔍 Check the deployment logs for details"
-          fi
