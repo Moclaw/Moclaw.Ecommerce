@@ -13,8 +13,6 @@ env:
   IMAGE_CORE: moclaw/ecom-core-api
   IMAGE_USERS: moclaw/ecom-users-api
   KUBE_NAMESPACE: ecommerce
-  CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-  CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
   KUBECTL_TIMEOUT: 300s
   HEALTH_CHECK_TIMEOUT: 180s
 
@@ -87,6 +85,7 @@ jobs:
           TAG="${{ github.sha }}"
           SHORT_SHA="${TAG:0:8}"
           echo "tags=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
   build-images:
     name: Build Images
     runs-on: ubuntu-latest
@@ -132,9 +131,10 @@ jobs:
           cache-to: type=registry,ref=${{ matrix.service.image_name }}:buildcache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+
   deploy-minikube:
-    name: Deploy via SSH
-    runs-on: ubuntu-latest
+    name: Deploy to Minikube
+    runs-on: self-hosted
     needs: [build-and-test, build-images]
     if: needs.build-and-test.outputs.should-deploy == 'true'
 
@@ -142,208 +142,208 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: 🔐 Setup SSH
-        shell: bash
+      - name: 🔐 Login to Docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      - name: 🚀 Deploy to Minikube
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
+          CORE_IMAGE: ${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}
+          USERS_IMAGE: ${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}
+          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
         run: |
-          # Create SSH directory if it doesn't exist
-          mkdir -p ~/.ssh
-          
-          # Clean and prepare SSH key
-          echo "$SSH_PRIVATE_KEY" | tr -d '\r' | sed '/^$/d' > deploy_key
-          
-          # Validate SSH key format
-          if ! ssh-keygen -l -f deploy_key >/dev/null 2>&1; then
-            echo "❌ Invalid SSH private key format"
-            echo "Key preview (first 50 chars): $(head -c 50 deploy_key)..."
-            exit 1
-          fi
-          
-          chmod 600 deploy_key
-          
-          # Enhanced host resolution and connectivity checks
-          echo "Analyzing tunnel host: $CF_TUNNEL_HOST"
-          
-          # Check if this is a Cloudflare Tunnel hostname
-          if echo "$CF_TUNNEL_HOST" | grep -qE "\.(trycloudflare\.com|cfargotunnel\.com)$"; then
-            echo "✅ Detected Cloudflare Tunnel hostname"
-            TUNNEL_TYPE="cloudflare"
-          else
-            echo "ℹ️ Regular hostname detected"
-            TUNNEL_TYPE="regular"
-          fi
-          
-          # Get all resolved IPs
-          echo "Resolving hostname..."
-          RESOLVED_IPS=$(nslookup "$CF_TUNNEL_HOST" | grep -A 10 "Non-authoritative answer:" | grep "Address:" | awk '{print $2}' | grep -v "#" || echo "")
-          
-          if [ -z "$RESOLVED_IPS" ]; then
-            echo "❌ Failed to resolve hostname"
-            exit 1
-          fi
-          
-          echo "Resolved IPs:"
-          echo "$RESOLVED_IPS" | while read ip; do
-            echo "  - $ip"
-          done
-          
-          # Test connectivity to each IP on port 22
-          echo "Testing SSH connectivity..."
-          SSH_ACCESSIBLE=false
-          
-          for ip in $RESOLVED_IPS; do
-            echo "Testing connectivity to $ip:22..."
-            if timeout 10 nc -zv "$ip" 22 2>/dev/null; then
-              echo "✅ SSH port accessible on $ip"
-              SSH_ACCESSIBLE=true
-              WORKING_IP="$ip"
-              break
-            else
-              echo "❌ SSH port not accessible on $ip"
-            fi
-          done
-          
-          if [ "$SSH_ACCESSIBLE" = "false" ]; then
-            echo "❌ SSH port 22 not accessible on any resolved IP"
-            echo "This suggests the Cloudflare Tunnel is not configured for SSH or is not running"
+          set -e
+
+          # Set error handling
+          trap 'echo "❌ Deployment failed at line $LINENO"' ERR
+
+          echo "🚀 Starting deployment..."
+          echo "Core Image: $CORE_IMAGE"
+          echo "Users Image: $USERS_IMAGE"
+          echo "Namespace: $KUBE_NAMESPACE"
+
+          # Function for retry logic
+          retry_command() {
+            local max_attempts=3
+            local attempt=1
+            local command="$1"
             
-            # Additional troubleshooting
-            echo "Troubleshooting steps:"
-            echo "1. Verify the Cloudflare Tunnel is running on the target server"
-            echo "2. Check tunnel configuration includes SSH (port 22)"
-            echo "3. Verify CF_TUNNEL_HOST secret contains the correct tunnel hostname"
-            echo "4. Test manual SSH connection: ssh -i key user@$CF_TUNNEL_HOST"
-            
-            # Try alternative ports commonly used for SSH tunnels
-            echo "Checking alternative SSH ports..."
-            for port in 2222 22022 22222; do
-              echo "Testing port $port..."
-              if timeout 5 nc -zv "$CF_TUNNEL_HOST" "$port" 2>/dev/null; then
-                echo "⚠️ Found SSH service on port $port"
-                echo "Consider updating your tunnel configuration or SSH command"
+            while [ $attempt -le $max_attempts ]; do
+              echo "Attempt $attempt/$max_attempts: $command"
+              if eval "$command"; then
+                return 0
               fi
+              attempt=$((attempt + 1))
+              [ $attempt -le $max_attempts ] && sleep 10
             done
-            
-            exit 1
+            echo "Command failed after $max_attempts attempts: $command"
+            return 1
+          }
+
+          # Check/Start Minikube with retry
+          echo "Checking Minikube status..."
+          if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
+            echo "Starting Minikube cluster..."
+            minikube delete 2>/dev/null || true
+            retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
+            minikube addons enable ingress
+            kubectl wait --for=condition=Ready nodes --all --timeout=180s
           fi
-          
-          # Try to get host key with extended timeout for tunnel connections
-          echo "Attempting to get host key..."
-          rm -f known_hosts
-          touch known_hosts
-          
-          # For Cloudflare tunnels, we often need to accept the key on first connection
-          if [ "$TUNNEL_TYPE" = "cloudflare" ]; then
-            echo "Using StrictHostKeyChecking=accept-new for Cloudflare Tunnel"
-            SSH_OPTS="-o StrictHostKeyChecking=accept-new"
-          else
-            # Try to get host key first
-            for i in {1..3}; do
-              echo "Host key attempt $i/3..."
-              if timeout 15 ssh-keyscan -H -T 15 "$CF_TUNNEL_HOST" >> known_hosts 2>/dev/null && [ -s known_hosts ]; then
-                echo "✅ Host key obtained successfully"
-                SSH_OPTS="-o StrictHostKeyChecking=yes"
-                break
-              fi
-              echo "Host key attempt $i failed"
-              sleep 5
-            done
-            
-            # Fallback to accept-new if we couldn't get the key
-            if [ ! -s known_hosts ]; then
-              echo "⚠️ Using StrictHostKeyChecking=accept-new as fallback"
-              SSH_OPTS="-o StrictHostKeyChecking=accept-new"
-            fi
+
+          MINIKUBE_IP=$(minikube ip)
+          echo "Minikube IP: $MINIKUBE_IP"
+
+          # Optimized image handling
+          echo "Managing Docker images..."
+
+          # Check if images exist locally first
+          if ! docker image inspect "$CORE_IMAGE" >/dev/null 2>&1; then
+            echo "Pulling Core API image..."
+            retry_command "docker pull $CORE_IMAGE"
           fi
-          
-          # Test SSH connection with appropriate options
-          echo "Testing SSH connection..."
-          SSH_CMD="ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o ConnectTimeout=60 -o ServerAliveInterval=30 $SSH_OPTS"
-          
-          if $SSH_CMD "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'SSH connection test successful'" 2>&1; then
-            echo "✅ SSH connection established successfully"
+
+          if ! docker image inspect "$USERS_IMAGE" >/dev/null 2>&1; then
+            echo "Pulling Users API image..."
+            retry_command "docker pull $USERS_IMAGE"
+          fi
+
+          # Load images to minikube efficiently
+          if ! minikube image ls | grep -q "$IMAGE_TAG"; then
+            echo "Loading images to Minikube..."
+            minikube image load "$CORE_IMAGE" &
+            minikube image load "$USERS_IMAGE" &
+            wait
+            echo "✅ Images loaded to Minikube"
           else
-            echo "❌ SSH connection failed"
-            
-            # Additional debugging for tunnel issues
-            echo "Advanced troubleshooting:"
-            echo "1. Verify tunnel daemon is running: systemctl status cloudflared"
-            echo "2. Check tunnel logs: journalctl -u cloudflared -f"
-            echo "3. Test tunnel config: cloudflared tunnel info <tunnel-name>"
-            echo "4. Verify ingress rules include SSH"
-            
-            # Try with different SSH options for tunnel compatibility
-            echo "Trying connection with tunnel-optimized settings..."
-            if ssh -i deploy_key \
-              -o UserKnownHostsFile=known_hosts \
-              -o StrictHostKeyChecking=accept-new \
-              -o ConnectTimeout=90 \
-              -o ServerAliveInterval=60 \
-              -o ServerAliveCountMax=3 \
-              -o TCPKeepAlive=yes \
-              "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" "echo 'Tunnel SSH test successful'" 2>/dev/null; then
-              echo "✅ SSH connection successful with tunnel settings"
-            else
-              echo "❌ All SSH connection attempts failed"
-              exit 1
+            echo "✅ Images already present in Minikube"
+          fi
+
+          # Deploy Kubernetes resources with better error handling
+          echo "Deploying Kubernetes resources..."
+
+          # Create namespace
+          kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+          # Apply configurations
+          [ -f k8s/secrets.yaml ] && kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
+          [ -f k8s/configmap.yaml ] && kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
+
+          # Deploy PostgreSQL if not exists
+          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
+            [ -f k8s/postgres/deployment.yaml ] && kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
+          fi
+
+          # Deploy APIs
+          [ -d k8s/core-api ] && kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
+          [ -d k8s/users-api ] && kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
+
+          # Update images
+          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE --record
+          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE --record
+
+          # Apply environment patches
+          kubectl patch deployment core-api -n $KUBE_NAMESPACE --type='merge' -p='{
+            "spec": {
+              "template": {
+                "spec": {
+                  "containers": [{
+                    "name": "core-api",
+                    "env": [
+                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
+                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
+                    ]
+                  }]
+                }
+              }
+            }
+          }' 2>/dev/null || echo "Core API patch already applied"
+
+          kubectl patch deployment users-api -n $KUBE_NAMESPACE --type='merge' -p='{
+            "spec": {
+              "template": {
+                "spec": {
+                  "containers": [{
+                    "name": "users-api",
+                    "env": [
+                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
+                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
+                    ]
+                  }]
+                }
+              }
+            }
+          }' 2>/dev/null || echo "Users API patch already applied"
+
+          # Wait for deployments with improved monitoring
+          echo "Waiting for deployments to be ready..."
+
+          # Wait for PostgreSQL first
+          if kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
+            if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
+              kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
             fi
           fi
 
-      - name: 📤 Transfer deployment files
-        env:
-          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-        run: |
-          # Create deployment archive with better error handling
-          echo "Creating deployment archive..."
-          if [ -d "k8s" ]; then
-            if [ -d ".github/scripts" ]; then
-              tar -czf deployment.tar.gz k8s/ .github/scripts/
-            else
-              tar -czf deployment.tar.gz k8s/
-            fi
-          else
-            echo "❌ No k8s directory found"
-            exit 1
-          fi
-          
-          # Verify archive was created
-          if [ ! -f deployment.tar.gz ]; then
-            echo "❌ Failed to create deployment archive"
-            exit 1
-          fi
-          
-          echo "Archive size: $(du -h deployment.tar.gz | cut -f1)"
-          
-          # Transfer with retry logic
-          echo "Transferring deployment files..."
-          for i in {1..3}; do
-            if scp -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=30 deployment.tar.gz "$CF_TUNNEL_USER@$CF_TUNNEL_HOST":~/; then
-              echo "✅ File transfer successful"
-              break
-            else
-              echo "Transfer attempt $i failed"
-              if [ $i -eq 3 ]; then
-                echo "❌ All transfer attempts failed"
-                exit 1
-              fi
-              sleep 10
-            fi
-          done
-          
-          # Extract files on remote server with verification
-          echo "Extracting files on remote server..."
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=30 "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'EXTRACT_EOF'
-            set -e
-            echo "Cleaning previous deployment..."
-            rm -rf ~/deployment
-            mkdir -p ~/deployment
+          # Wait for APIs in parallel
+          kubectl rollout status deployment/core-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
+          CORE_PID=$!
+          kubectl rollout status deployment/users-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
+          USERS_PID=$!
+
+          # Wait for both deployments
+          wait $CORE_PID && echo "✅ Core API deployment ready" || echo "❌ Core API deployment failed"
+          wait $USERS_PID && echo "✅ Users API deployment ready" || echo "❌ Users API deployment failed"
+
+          echo "✅ All deployments processed!"
+
+          # Enhanced health checks with proper error handling
+          echo "Performing health checks..."
+
+          health_check() {
+            local url=$1
+            local service_name=$2
+            local max_attempts=15
+            local attempt=1
             
-            echo "Extracting archive..."
-            if tar -xzf ~/deployment.tar.gz -C ~/deployment; then
+            while [ $attempt -le $max_attempts ]; do
+              if curl -s --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
+                echo "✅ $service_name is healthy"
+                return 0
+              fi
+              echo "Waiting for $service_name... (attempt $attempt/$max_attempts)"
+              sleep 10
+              attempt=$((attempt + 1))
+            done
+            echo "⚠️ $service_name health check timeout"
+            return 1
+          }
+
+          health_check "http://$MINIKUBE_IP:30301/" "Core API" &
+          health_check "http://$MINIKUBE_IP:30302/" "Users API" &
+          wait
+
+          # Final status report
+          echo ""
+          echo "🚀 Deployment Complete!"
+          echo "=================================="
+          echo "Core API: http://$MINIKUBE_IP:30301"
+          echo "Users API: http://$MINIKUBE_IP:30302"
+          echo "Image Tag: $IMAGE_TAG"
+          echo ""
+          echo "Pod Status:"
+          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print "  " $1": "$3}'
+
+          # Cleanup old images to save space
+          docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
+
+      - name: 🧹 Cleanup on failure
+        if: failure()
+        run: |
+          kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
+          docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
               echo "✅ Extraction successful"
               rm ~/deployment.tar.gz
               echo "Deployment directory contents:"
@@ -366,10 +366,10 @@ jobs:
           # Execute deployment with better error handling and connection management
           ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'DEPLOY_EOF'
           set -e
-          
+
           # Set error handling
           trap 'echo "❌ Deployment failed at line $LINENO"' ERR
-          
+
           # Export variables for remote execution with validation
           export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ env.IMAGE_TAG }}"
           export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ env.IMAGE_TAG }}"
@@ -378,7 +378,7 @@ jobs:
           export REGISTRY_URL="${{ env.REGISTRY_URL }}"
           export REGISTRY_USERNAME="${{ env.REGISTRY_USERNAME }}"
           export REGISTRY_PASSWORD="${{ env.REGISTRY_PASSWORD }}"
-          
+
           # Validate required variables
           for var in CORE_IMAGE USERS_IMAGE KUBE_NAMESPACE KUBECTL_TIMEOUT REGISTRY_URL REGISTRY_USERNAME REGISTRY_PASSWORD; do
             if [ -z "${!var}" ]; then
@@ -573,22 +573,11 @@ jobs:
 
           EOF
 
-      - name: 🧹 Cleanup SSH
-        if: always()
-        run: |
-          rm -f deploy_key known_hosts
-
-      - name: 🧹 Remote cleanup on failure
+      - name: 🧹 Cleanup on failure
         if: failure()
-        env:
-          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-          KUBE_NAMESPACE: ${{ env.KUBE_NAMESPACE }}
         run: |
-          if [ -f deploy_key ]; then
-            ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" '
-              kubectl delete pods --field-selector=status.phase=Failed -n '"$KUBE_NAMESPACE"' --ignore-not-found=true
-              docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
-              rm -rf ~/deployment
-            ' || echo "Remote cleanup failed"
-          fi
+          kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
+          docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
+          echo "✅ Cleanup completed"
+          echo "❌ Deployment failed, cleanup executed"
+
