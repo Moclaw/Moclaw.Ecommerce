@@ -188,7 +188,16 @@ jobs:
           if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
             echo "Starting Minikube cluster..."
             minikube delete 2>/dev/null || true
-            retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
+            
+            # Use appropriate driver based on environment
+            if [ "$(id -u)" -eq 0 ]; then
+              echo "Running as root, using none driver"
+              retry_command "minikube start --driver=none --kubernetes-version=v1.28.3 --wait=all"
+            else
+              echo "Running as non-root, using docker driver"
+              retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
+            fi
+            
             minikube addons enable ingress
             kubectl wait --for=condition=Ready nodes --all --timeout=180s
           fi
@@ -210,15 +219,19 @@ jobs:
             retry_command "docker pull $USERS_IMAGE"
           fi
 
-          # Load images to minikube efficiently
-          if ! minikube image ls | grep -q "$IMAGE_TAG"; then
-            echo "Loading images to Minikube..."
-            minikube image load "$CORE_IMAGE" &
-            minikube image load "$USERS_IMAGE" &
-            wait
-            echo "✅ Images loaded to Minikube"
+          # Load images to minikube efficiently (skip if using none driver)
+          if [ "$(id -u)" -ne 0 ]; then
+            if ! minikube image ls | grep -q "$IMAGE_TAG"; then
+              echo "Loading images to Minikube..."
+              minikube image load "$CORE_IMAGE" &
+              minikube image load "$USERS_IMAGE" &
+              wait
+              echo "✅ Images loaded to Minikube"
+            else
+              echo "✅ Images already present in Minikube"
+            fi
           else
-            echo "✅ Images already present in Minikube"
+            echo "✅ Using none driver - images already available to kubelet"
           fi
 
           # Deploy Kubernetes resources with better error handling
@@ -321,16 +334,25 @@ jobs:
             return 1
           }
 
-          health_check "http://$MINIKUBE_IP:30301/" "Core API" &
-          health_check "http://$MINIKUBE_IP:30302/" "Users API" &
+          # Get the appropriate IP for health checks
+          if [ "$(id -u)" -eq 0 ]; then
+            # For none driver, use localhost or node IP
+            HEALTH_CHECK_IP="localhost"
+          else
+            # For docker driver, use minikube IP
+            HEALTH_CHECK_IP="$MINIKUBE_IP"
+          fi
+
+          health_check "http://$HEALTH_CHECK_IP:30301/" "Core API" &
+          health_check "http://$HEALTH_CHECK_IP:30302/" "Users API" &
           wait
 
           # Final status report
           echo ""
           echo "🚀 Deployment Complete!"
           echo "=================================="
-          echo "Core API: http://$MINIKUBE_IP:30301"
-          echo "Users API: http://$MINIKUBE_IP:30302"
+          echo "Core API: http://$HEALTH_CHECK_IP:30301"
+          echo "Users API: http://$HEALTH_CHECK_IP:30302"
           echo "Image Tag: $IMAGE_TAG"
           echo ""
           echo "Pod Status:"
@@ -344,28 +366,6 @@ jobs:
         run: |
           kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
           docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
-              echo "✅ Extraction successful"
-              rm ~/deployment.tar.gz
-              echo "Deployment directory contents:"
-              ls -la ~/deployment/
-            else
-              echo "❌ Extraction failed"
-              exit 1
-            fi
-          EXTRACT_EOF
-
-      - name: 🚀 Deploy to Minikube (Remote)
-        env:
-          CF_TUNNEL_HOST: ${{ secrets.CF_TUNNEL_HOST }}
-          CF_TUNNEL_USER: ${{ secrets.CF_TUNNEL_USER }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
-        run: |
-          # Execute deployment with better error handling and connection management
-          ssh -i deploy_key -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=no -o ConnectTimeout=60 -o ServerAliveInterval=30 "$CF_TUNNEL_USER@$CF_TUNNEL_HOST" << 'DEPLOY_EOF'
-          set -e
 
           # Set error handling
           trap 'echo "❌ Deployment failed at line $LINENO"' ERR
