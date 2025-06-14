@@ -151,6 +151,95 @@ jobs:
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
+      - name: 🧹 Pre-deployment cleanup
+        run: |
+          echo "🧹 Starting pre-deployment cleanup..."
+
+          # Force stop and remove all containers with our project name
+          echo "🛑 Force stopping existing containers..."
+          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=10 || true
+          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
+
+          # Kill processes using our ports
+          echo "🔌 Freeing up ports..."
+          for port in 5300 5301 5302 9090 3000; do
+            echo "Checking port $port..."
+            if sudo lsof -ti:$port; then
+              echo "Killing processes on port $port"
+              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+              sleep 2
+            fi
+          done
+
+          # Clean up any existing docker-compose resources
+          echo "🧹 Cleaning up docker-compose resources..."
+          docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
+
+          # Remove any dangling containers
+          echo "🧹 Removing dangling containers..."
+          docker container prune -f || true
+
+          # Clean up networks that might conflict
+          echo "🌐 Cleaning up networks..."
+          docker network ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker network rm || true
+          docker network prune -f || true
+
+          # Clean up volumes that might cause mount issues
+          echo "💾 Cleaning up volumes..."
+          docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm || true
+          docker volume prune -f || true
+
+          # Verify monitoring directory exists
+          echo "📁 Verifying monitoring configuration..."
+          if [ ! -f "monitoring/prometheus.yml" ]; then
+            echo "⚠️ prometheus.yml not found, creating monitoring directory structure..."
+            mkdir -p monitoring
+            # Create a basic prometheus config if it doesn't exist
+            cat > monitoring/prometheus.yml << 'EOF'
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            
+            - job_name: 'ecom-gateway'
+              static_configs:
+                - targets: ['ecom.gateway.api:5300']
+              metrics_path: '/metrics'
+              
+            - job_name: 'ecom-core'
+              static_configs:
+                - targets: ['ecom.core.api:5301']
+              metrics_path: '/metrics'
+              
+            - job_name: 'ecom-users'
+              static_configs:
+                - targets: ['ecom.users.api:5302']
+              metrics_path: '/metrics'
+          EOF
+          fi
+
+          # Wait a moment for ports to be fully released
+          echo "⏳ Waiting for ports to be released..."
+          sleep 5
+
+          # Verify ports are free
+          echo "🔍 Verifying ports are available..."
+          for port in 5300 5301 5302 9090 3000; do
+            if sudo lsof -ti:$port; then
+              echo "❌ Port $port is still in use!"
+              sudo lsof -i:$port
+              exit 1
+            else
+              echo "✅ Port $port is available"
+            fi
+          done
+
+          echo "✅ Pre-deployment cleanup completed"
+
       - name: 🚀 Deploy with Docker Compose
         env:
           GATEWAY_IMAGE: ${{ env.IMAGE_GATEWAY }}:${{ needs.build-and-test.outputs.image-tag }}
@@ -192,10 +281,6 @@ jobs:
           retry_command "docker pull $CORE_IMAGE"
           retry_command "docker pull $USERS_IMAGE"
 
-          # Stop existing containers
-          echo "🛑 Stopping existing containers..."
-          docker-compose -f docker-compose.yml down --remove-orphans || true
-
           # Set image tags in environment
           export DOCKER_REGISTRY=""
           export GATEWAY_TAG=$IMAGE_TAG
@@ -204,6 +289,7 @@ jobs:
 
           # Create docker-compose override with specific image tags
           cat > docker-compose.override.yml << EOF
+          version: '3.8'
           services:
             ecom.gateway.api:
               image: $GATEWAY_IMAGE
@@ -213,9 +299,13 @@ jobs:
               image: $USERS_IMAGE
           EOF
 
-          # Deploy services
+          # Deploy services with better error handling
           echo "🚀 Starting services with Docker Compose..."
-          docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build
+          if ! docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build; then
+            echo "❌ Docker Compose failed, checking logs..."
+            docker-compose -f docker-compose.yml -f docker-compose.override.yml logs --tail=50
+            exit 1
+          fi
 
           # Wait for services to be healthy
           echo "⏳ Waiting for services to be healthy..."
@@ -228,6 +318,7 @@ jobs:
                 break
               fi
               echo "Waiting for services to be healthy..."
+              docker-compose -f docker-compose.yml -f docker-compose.override.yml ps
               sleep 10
             done
           '
@@ -283,50 +374,86 @@ jobs:
         if: failure()
         run: |
           echo "❌ Deployment failed, starting comprehensive cleanup..."
-          
-          # Stop and remove all containers
-          echo "🛑 Stopping and removing containers..."
+
+          # Show what went wrong
+          echo "🔍 Checking container logs..."
+          docker-compose -f docker-compose.yml logs --tail=100 || true
+
+          # Show current container status
+          echo "📊 Current container status:"
+          docker ps -a
+
+          # Show port usage
+          echo "🔌 Current port usage:"
+          sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || true
+
+          # Force stop and remove all containers
+          echo "🛑 Force stopping and removing all containers..."
+          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=5 || true
+          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
+
+          # Stop and remove all containers using docker-compose
           docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
-          
+
           # Remove any dangling containers
           echo "🧹 Removing dangling containers..."
           docker container prune -f || true
-          
-          # Remove unused networks
+
+          # Clean up networks
           echo "🌐 Cleaning up networks..."
+          docker network ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker network rm || true
           docker network prune -f || true
-          
-          # Remove unused volumes
+
+          # Clean up volumes
           echo "💾 Cleaning up volumes..."
+          docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm -f || true
           docker volume prune -f || true
-          
+
+          # Kill any remaining processes on deployment ports
+          echo "🔌 Force killing processes on ports..."
+          for port in 5300 5301 5302 9090 3000; do
+            if sudo lsof -ti:$port; then
+              echo "Force killing processes on port $port"
+              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+            fi
+          done
+
           # Remove unused images (more aggressive cleanup)
           echo "🖼️ Cleaning up images..."
           docker image prune -f --filter "until=1h" || true
           docker image prune -a -f --filter "label=org.opencontainers.image.title=ecom" || true
-          
+
           # Remove build cache
           echo "🗄️ Cleaning up build cache..."
           docker builder prune -f --filter "until=1h" || true
-          
-          # Kill any remaining processes on deployment ports
-          echo "🔌 Cleaning up ports..."
-          sudo lsof -ti:5300 | xargs -r sudo kill -9 || true
-          sudo lsof -ti:5301 | xargs -r sudo kill -9 || true
-          sudo lsof -ti:5302 | xargs -r sudo kill -9 || true
-          
+
           # Clear temporary files
           echo "📁 Cleaning up temporary files..."
           rm -f docker-compose.override.yml || true
-          
+
+          # System cleanup
+          echo "🧹 System cleanup..."
+          docker system prune -f --filter "until=1h" || true
+
           # Show disk usage after cleanup
           echo "💿 Disk usage after cleanup:"
           df -h
-          
+
           # Show remaining Docker resources
           echo "🐳 Remaining Docker resources:"
           docker system df
-          
+
+          # Final port check
+          echo "🔍 Final port check:"
+          for port in 5300 5301 5302 9090 3000; do
+            if sudo lsof -ti:$port; then
+              echo "⚠️ Port $port still in use:"
+              sudo lsof -i:$port
+            else
+              echo "✅ Port $port is now free"
+            fi
+          done
+
           echo "✅ Comprehensive cleanup completed"
           echo "❌ Deployment failed, cleanup executed"
 
@@ -335,15 +462,15 @@ jobs:
     runs-on: self-hosted
     needs: [deploy-docker-compose]
     if: always() && needs.build-and-test.outputs.should-deploy == 'true'
-    
+
     steps:
       - name: 🧹 Post-deployment cleanup
         run: |
           echo "🧹 Starting post-deployment cleanup..."
-          
+
           # Clean up old Docker images (keep last 3 versions)
           echo "🖼️ Cleaning up old images..."
-          
+
           cleanup_old_images() {
             local image_name=$1
             echo "Cleaning up old versions of $image_name..."
@@ -358,24 +485,24 @@ jobs:
               | awk '{print $1}' \
               | xargs -r docker rmi -f || true
           }
-          
+
           cleanup_old_images "${{ env.IMAGE_GATEWAY }}"
           cleanup_old_images "${{ env.IMAGE_CORE }}"
           cleanup_old_images "${{ env.IMAGE_USERS }}"
-          
+
           # Clean up dangling images and build cache
           echo "🗑️ Cleaning up dangling resources..."
           docker image prune -f --filter "until=24h" || true
           docker builder prune -f --filter "until=24h" || true
-          
+
           # Clean up unused networks (keep active ones)
           echo "🌐 Cleaning up unused networks..."
           docker network prune -f || true
-          
+
           # Clean up temporary files
           echo "📁 Cleaning up temporary files..."
           rm -f docker-compose.override.yml || true
-          
+
           # Show final system status
           echo "📊 Final system status:"
           echo "Docker system usage:"
@@ -386,7 +513,7 @@ jobs:
           echo ""
           echo "Active containers:"
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-          
+
           echo "✅ Post-deployment cleanup completed"
 
   notify-status:
@@ -394,7 +521,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-and-test, deploy-docker-compose, cleanup-resources]
     if: always() && needs.build-and-test.outputs.should-deploy == 'true'
-    
+
     steps:
       - name: 📢 Deployment Status Summary
         run: |
@@ -405,7 +532,7 @@ jobs:
           echo "Cleanup: ${{ needs.cleanup-resources.result }}"
           echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
           echo ""
-          
+
           if [ "${{ needs.deploy-docker-compose.result }}" = "success" ]; then
             echo "✅ Deployment completed successfully!"
             echo "🌐 Services are available at:"
@@ -417,4 +544,3 @@ jobs:
             echo "🧹 Resources have been cleaned up automatically"
             echo "🔍 Check the deployment logs for details"
           fi
-
