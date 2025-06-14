@@ -33,18 +33,61 @@ jobs:
       
       - name: 🔧 Setup .NET SDK
         run: |
-          # Check if .NET SDK is installed, if not, display message
+          # Check if .NET SDK is installed
           if ! command -v dotnet &> /dev/null; then
-            echo "⚠️ .NET SDK not found. Please install .NET ${{ env.DOTNET_VERSION }} on the self-hosted runner."
-            exit 1
+            echo "⚠️ .NET SDK not found. Attempting to install .NET ${{ env.DOTNET_VERSION }}..."
+            
+            # Detect OS
+            if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+              # Install .NET SDK on Linux
+              wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+              chmod +x dotnet-install.sh
+              ./dotnet-install.sh --version ${{ env.DOTNET_VERSION }} --install-dir $HOME/.dotnet
+              export DOTNET_ROOT=$HOME/.dotnet
+              export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
+              echo "export DOTNET_ROOT=$HOME/.dotnet" >> $HOME/.bashrc
+              echo "export PATH=\$PATH:\$DOTNET_ROOT:\$DOTNET_ROOT/tools" >> $HOME/.bashrc
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+              # Install .NET SDK on macOS
+              wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
+              chmod +x dotnet-install.sh
+              ./dotnet-install.sh --version ${{ env.DOTNET_VERSION }} --install-dir $HOME/.dotnet
+              export DOTNET_ROOT=$HOME/.dotnet
+              export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
+              echo "export DOTNET_ROOT=$HOME/.dotnet" >> $HOME/.zshrc
+              echo "export PATH=\$PATH:\$DOTNET_ROOT:\$DOTNET_ROOT/tools" >> $HOME/.zshrc
+            else
+              echo "❌ Unsupported OS for automatic .NET SDK installation."
+              echo "Please install .NET SDK ${{ env.DOTNET_VERSION }} manually on this runner."
+              exit 1
+            fi
+            
+            # Source the profile to update PATH in current session
+            if [[ -f "$HOME/.bashrc" ]]; then
+              source $HOME/.bashrc
+            elif [[ -f "$HOME/.zshrc" ]]; then
+              source $HOME/.zshrc
+            fi
+            
+            # Verify installation
+            if ! command -v dotnet &> /dev/null; then
+              echo "❌ .NET SDK installation failed. Please install manually."
+              exit 1
+            fi
           fi
           
           # Display installed version
+          echo "✅ .NET SDK found:"
           dotnet --info | grep "Version"
 
       - name: 📦 Restore dependencies
         working-directory: ${{ env.PROJECT_PATH }}
         run: |
+          # Ensure dotnet is in PATH even if environment wasn't properly sourced
+          if [[ -d "$HOME/.dotnet" ]]; then
+            export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
+          fi
+          
           dotnet restore Moclaw.Ecommerce.sln --verbosity minimal
 
       - name: 🏗️ Build solution
