@@ -170,7 +170,7 @@ jobs:
       - name: 🧹 Clean up existing containers
         run: |
           echo "🧹 Cleaning up existing containers..."
-          docker-compose down --remove-orphans || true
+          docker compose down --remove-orphans || true
           docker container prune -f || true
           docker network prune -f || true
 
@@ -230,9 +230,9 @@ jobs:
 
           # Start services
           if [ -f "docker-compose.override.yml" ]; then
-            docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d
+            docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
           else
-            docker-compose up -d --build
+            docker compose up -d --build
           fi
 
       - name: ⏳ Wait for services to be ready
@@ -271,7 +271,7 @@ jobs:
           echo "🎉 Deployment completed!"
           echo "===================="
           echo "Services:"
-          docker-compose ps
+          docker compose ps
           echo ""
           echo "Service URLs:"
           echo "- Gateway API: http://localhost:5300"
