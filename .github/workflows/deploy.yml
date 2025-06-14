@@ -183,6 +183,68 @@ jobs:
             return 1
           }
 
+          # Install cri-dockerd if running as root and using none driver
+          install_cri_dockerd() {
+            if command -v cri-dockerd >/dev/null 2>&1; then
+              echo "✅ cri-dockerd already installed"
+              return 0
+            fi
+            
+            echo "📦 Installing cri-dockerd..."
+            
+            # Download and install cri-dockerd
+            CRI_DOCKERD_VERSION="0.3.8"
+            wget -q "https://github.com/Mirantis/cri-dockerd/releases/download/v${CRI_DOCKERD_VERSION}/cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
+            tar xzf "cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
+            sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
+            rm -rf cri-dockerd*
+            
+            # Create systemd service files
+            sudo tee /etc/systemd/system/cri-docker.service > /dev/null <<EOF
+          [Unit]
+          Description=CRI Interface for Docker Application Container Engine
+          Documentation=https://docs.mirantis.com
+          After=network-online.target firewalld.service docker.service
+          Wants=network-online.target
+          Requires=cri-docker.socket
+
+          [Service]
+          Type=notify
+          ExecStart=/usr/local/bin/cri-dockerd --container-runtime-endpoint fd://
+          ExecReload=/bin/kill -s HUP \$MAINPID
+          TimeoutSec=0
+          RestartSec=2
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+            sudo tee /etc/systemd/system/cri-docker.socket > /dev/null <<EOF
+          [Unit]
+          Description=CRI Docker Socket for the API
+          PartOf=cri-docker.service
+
+          [Socket]
+          ListenStream=%t/cri-dockerd.sock
+          SocketMode=0660
+          SocketUser=root
+          SocketGroup=docker
+
+          [Install]
+          WantedBy=sockets.target
+          EOF
+
+            # Enable and start cri-dockerd
+            sudo systemctl daemon-reload
+            sudo systemctl enable cri-docker.service
+            sudo systemctl enable cri-docker.socket
+            sudo systemctl start cri-docker.service
+            sudo systemctl start cri-docker.socket
+            
+            echo "✅ cri-dockerd installed and started"
+          }
+
           # Check/Start Minikube with retry
           echo "Checking Minikube status..."
           if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
@@ -191,8 +253,13 @@ jobs:
             
             # Use appropriate driver based on environment
             if [ "$(id -u)" -eq 0 ]; then
-              echo "Running as root, using none driver"
-              retry_command "minikube start --driver=none --kubernetes-version=v1.28.3 --wait=all"
+              echo "Running as root, using none driver with containerd"
+              
+              # Install cri-dockerd if needed
+              install_cri_dockerd
+              
+              # Use containerd runtime instead of docker to avoid cri-dockerd issues
+              retry_command "minikube start --driver=none --container-runtime=containerd --kubernetes-version=v1.28.3 --wait=all"
             else
               echo "Running as non-root, using docker driver"
               retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
@@ -219,8 +286,13 @@ jobs:
             retry_command "docker pull $USERS_IMAGE"
           fi
 
-          # Load images to minikube efficiently (skip if using none driver)
-          if [ "$(id -u)" -ne 0 ]; then
+          # Load images to minikube efficiently (different approach for none driver)
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "✅ Using none driver with containerd - images will be pulled directly by kubelet"
+            # For none driver with containerd, we need to tag images for containerd
+            sudo ctr -n k8s.io images import <(docker save "$CORE_IMAGE") || echo "Core image import failed, will pull from registry"
+            sudo ctr -n k8s.io images import <(docker save "$USERS_IMAGE") || echo "Users image import failed, will pull from registry"
+          else
             if ! minikube image ls | grep -q "$IMAGE_TAG"; then
               echo "Loading images to Minikube..."
               minikube image load "$CORE_IMAGE" &
@@ -230,8 +302,6 @@ jobs:
             else
               echo "✅ Images already present in Minikube"
             fi
-          else
-            echo "✅ Using none driver - images already available to kubelet"
           fi
 
           # Deploy Kubernetes resources with better error handling
@@ -408,6 +478,68 @@ jobs:
             done
             echo "Command failed after $max_attempts attempts: $command"
             return 1
+          }
+
+          # Install cri-dockerd if running as root and using none driver
+          install_cri_dockerd() {
+            if command -v cri-dockerd >/dev/null 2>&1; then
+              echo "✅ cri-dockerd already installed"
+              return 0
+            fi
+            
+            echo "📦 Installing cri-dockerd..."
+            
+            # Download and install cri-dockerd
+            CRI_DOCKERD_VERSION="0.3.8"
+            wget -q "https://github.com/Mirantis/cri-dockerd/releases/download/v${CRI_DOCKERD_VERSION}/cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
+            tar xzf "cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
+            sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
+            rm -rf cri-dockerd*
+            
+            # Create systemd service files
+            sudo tee /etc/systemd/system/cri-docker.service > /dev/null <<EOF
+          [Unit]
+          Description=CRI Interface for Docker Application Container Engine
+          Documentation=https://docs.mirantis.com
+          After=network-online.target firewalld.service docker.service
+          Wants=network-online.target
+          Requires=cri-docker.socket
+
+          [Service]
+          Type=notify
+          ExecStart=/usr/local/bin/cri-dockerd --container-runtime-endpoint fd://
+          ExecReload=/bin/kill -s HUP \$MAINPID
+          TimeoutSec=0
+          RestartSec=2
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+            sudo tee /etc/systemd/system/cri-docker.socket > /dev/null <<EOF
+          [Unit]
+          Description=CRI Docker Socket for the API
+          PartOf=cri-docker.service
+
+          [Socket]
+          ListenStream=%t/cri-dockerd.sock
+          SocketMode=0660
+          SocketUser=root
+          SocketGroup=docker
+
+          [Install]
+          WantedBy=sockets.target
+          EOF
+
+            # Enable and start cri-dockerd
+            sudo systemctl daemon-reload
+            sudo systemctl enable cri-docker.service
+            sudo systemctl enable cri-docker.socket
+            sudo systemctl start cri-docker.service
+            sudo systemctl start cri-docker.socket
+            
+            echo "✅ cri-dockerd installed and started"
           }
 
           # Check/Start Minikube with retry
