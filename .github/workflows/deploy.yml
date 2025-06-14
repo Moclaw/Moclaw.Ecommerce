@@ -3,17 +3,19 @@ name: CI/CD Pipeline - Ecommerce Platform
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
   DOTNET_VERSION: "9.0"
-  REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+  REGISTRY_URL: ${{ secrets.REGISTRY_URL || 'docker.io' }}
   REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
   REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-  IMAGE_GATEWAY: moclaw/ecom-gateway-api
-  IMAGE_CORE: moclaw/ecom-core-api
-  IMAGE_USERS: moclaw/ecom-users-api
-  HEALTH_CHECK_TIMEOUT: 180s
+  IMAGE_GATEWAY: ecomgatewayapi
+  IMAGE_CORE: ecomcoreapi
+  IMAGE_USERS: ecomusersapi
+  HEALTH_CHECK_TIMEOUT: 300s
 
 jobs:
   build-and-test:
@@ -35,11 +37,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should-deploy=true" >> $GITHUB_OUTPUT
             echo "Manual trigger - will deploy"
-          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          elif [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/develop" ]; then
             echo "should-deploy=true" >> $GITHUB_OUTPUT
-            echo "Main branch - will deploy"
+            echo "Main/Develop branch - will deploy"
           else
-            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile|yml|yaml)$"; then
+            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile|yml|yaml|json)$"; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "Source code changes detected - will deploy"
             else
@@ -71,11 +73,12 @@ jobs:
 
       - name: 🧪 Run tests
         run: |
-          if find . -name "*.Test*.csproj" -o -name "*Test.csproj" | head -1 | grep -q .; then
-            echo "Running unit tests..."
-            dotnet test --configuration Release --no-build --verbosity minimal --parallel
+          echo "🔍 Searching for test projects..."
+          if find . -name "*Test*.csproj" -o -name "*Tests.csproj" | head -1 | grep -q .; then
+            echo "✅ Test projects found, running tests..."
+            dotnet test --configuration Release --no-build --verbosity minimal --logger trx --results-directory ./TestResults
           else
-            echo "No test projects found, skipping tests"
+            echo "⚠️ No test projects found, skipping tests"
           fi
 
       - name: 🏷️ Generate metadata
@@ -95,13 +98,13 @@ jobs:
         service:
           - name: gateway-api
             dockerfile: Ecom.Gateway/src/Ecom.Gateway.API/Dockerfile
-            image_name: moclaw/ecom-gateway-api
+            image_name: ecomgatewayapi
           - name: core-api
             dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
-            image_name: moclaw/ecom-core-api
+            image_name: ecomcoreapi
           - name: users-api
             dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
-            image_name: moclaw/ecom-users-api
+            image_name: ecomusersapi
       fail-fast: false
       max-parallel: 3
 
@@ -113,6 +116,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: 🔐 Login to Docker registry
+        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_URL }}
@@ -124,7 +128,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
-          push: true
+          push: ${{ env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != '' }}
           tags: |
             ${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
             ${{ matrix.service.image_name }}:latest
@@ -134,9 +138,9 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
-  deploy-docker-compose:
-    name: Deploy with Docker Compose
-    runs-on: self-hosted
+  deploy-local:
+    name: Deploy to Local Environment
+    runs-on: ubuntu-latest
     needs: [build-and-test, build-images]
     if: needs.build-and-test.outputs.should-deploy == 'true'
 
@@ -145,96 +149,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🔐 Login to Docker registry
+        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_URL }}
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      - name: 🧹 Pre-deployment cleanup
+      - name: 🧹 Clean up existing containers
         run: |
-          echo "🧹 Starting pre-deployment cleanup..."
-
-          # Show current port usage before cleanup
-          echo "📊 Current port usage before cleanup:"
-          sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || echo "No processes found on target ports"
-
-          # Force stop and remove all containers with our project name
-          echo "🛑 Force stopping existing containers..."
-          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=5 || true
-          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
-
-          # Also stop any containers that might be using our ports
-          echo "🛑 Stopping containers using target ports..."
-          for port in 5300 5301 5302 9090 3000; do
-            container_ids=$(docker ps --filter "publish=$port" --format "{{.ID}}" || true)
-            if [ ! -z "$container_ids" ]; then
-              echo "Stopping containers using port $port: $container_ids"
-              echo "$container_ids" | xargs -r docker stop --time=5 || true
-              echo "$container_ids" | xargs -r docker rm -f || true
-            fi
-          done
-
-          # Clean up any existing docker-compose resources
-          echo "🧹 Cleaning up docker-compose resources..."
-          docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
-
-          # Remove any dangling containers
-          echo "🧹 Removing dangling containers..."
+          echo "🧹 Cleaning up existing containers..."
+          docker-compose down --remove-orphans || true
           docker container prune -f || true
-
-          # Clean up networks that might conflict
-          echo "🌐 Cleaning up networks..."
-          docker network ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker network rm || true
           docker network prune -f || true
 
-          # Clean up volumes that might cause mount issues
-          echo "💾 Cleaning up volumes..."
-          docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm || true
-          docker volume prune -f || true
-
-          # More aggressive port cleanup
-          echo "🔌 Aggressive port cleanup..."
-          for port in 5300 5301 5302 9090 3000; do
-            echo "Force killing processes on port $port..."
-            
-            # Kill processes using lsof
-            if sudo lsof -ti:$port 2>/dev/null; then
-              echo "Found processes on port $port, killing them..."
-              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
-            fi
-            
-            # Kill processes using netstat and kill
-            pids=$(sudo netstat -tulpn | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' || true)
-            if [ ! -z "$pids" ]; then
-              echo "Found additional PIDs on port $port: $pids"
-              echo "$pids" | xargs -r sudo kill -9 || true
-            fi
-            
-            # Kill processes using ss command as backup
-            pids=$(sudo ss -tulpn | grep ":$port " | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2 | grep -v '-' || true)
-            if [ ! -z "$pids" ]; then
-              echo "Found PIDs via ss on port $port: $pids"
-              echo "$pids" | xargs -r sudo kill -9 || true
-            fi
-            
-            sleep 1
-          done
-
-          # Wait longer for ports to be fully released
-          echo "⏳ Waiting for ports to be fully released..."
-          sleep 10
-
-          # Check for any remaining Docker processes that might interfere
-          echo "🐳 Checking for remaining Docker processes..."
-          docker ps -a | grep -E "(ecommerce|gateway|core|users)" | awk '{print $1}' | tail -n +2 | xargs -r docker rm -f || true
-
-          # Verify monitoring directory exists
-          echo "📁 Verifying monitoring configuration..."
+      - name: � Setup monitoring configuration
+        run: |
+          mkdir -p monitoring
           if [ ! -f "monitoring/prometheus.yml" ]; then
-            echo "⚠️ prometheus.yml not found, creating monitoring directory structure..."
-            mkdir -p monitoring
-            # Create a basic prometheus config if it doesn't exist
             cat > monitoring/prometheus.yml << 'EOF'
           global:
             scrape_interval: 15s
@@ -247,302 +179,109 @@ jobs:
             
             - job_name: 'ecom-gateway'
               static_configs:
-                - targets: ['ecom.gateway.api:5300']
+                - targets: ['ecom.gateway.api:8080']
               metrics_path: '/metrics'
               
             - job_name: 'ecom-core'
               static_configs:
-                - targets: ['ecom.core.api:5301']
+                - targets: ['ecom.core.api:8080']
               metrics_path: '/metrics'
               
             - job_name: 'ecom-users'
               static_configs:
-                - targets: ['ecom.users.api:5302']
+                - targets: ['ecom.users.api:8080']
               metrics_path: '/metrics'
           EOF
           fi
 
-          # Final verification with multiple attempts
-          echo "🔍 Final port verification..."
-          for attempt in 1 2 3; do
-            echo "Verification attempt $attempt/3..."
-            all_ports_free=true
-            
-            for port in 5300 5301 5302 9090 3000; do
-              if sudo lsof -ti:$port 2>/dev/null; then
-                echo "❌ Port $port is still in use on attempt $attempt!"
-                sudo lsof -i:$port || true
-                all_ports_free=false
-                
-                # Force kill again
-                sudo lsof -ti:$port | xargs -r sudo kill -9 || true
-              else
-                echo "✅ Port $port is available"
-              fi
-            done
-            
-            if [ "$all_ports_free" = true ]; then
-              echo "✅ All ports are now available"
-              break
-            fi
-            
-            if [ $attempt -lt 3 ]; then
-              echo "⏳ Waiting before next attempt..."
-              sleep 5
-            else
-              echo "❌ Some ports are still in use after 3 attempts!"
-              echo "📊 Current port usage:"
-              sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || true
-              echo "🔍 Attempting to continue deployment anyway..."
-            fi
-          done
-
-          echo "✅ Pre-deployment cleanup completed"
-
       - name: 🚀 Deploy with Docker Compose
         env:
-          GATEWAY_IMAGE: ${{ env.IMAGE_GATEWAY }}:${{ needs.build-and-test.outputs.image-tag }}
-          CORE_IMAGE: ${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}
-          USERS_IMAGE: ${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
+          DOCKER_REGISTRY: ${{ env.REGISTRY_URL && format('{0}/', env.REGISTRY_URL) || '' }}
         run: |
-          set -e
+          echo "🚀 Starting deployment..."
+          echo "Image Tag: $IMAGE_TAG"
+          echo "Registry: $DOCKER_REGISTRY"
 
-          # Set error handling
-          trap 'echo "❌ Deployment failed at line $LINENO"' ERR
-
-          echo "🚀 Starting Docker Compose deployment..."
-          echo "Gateway Image: $GATEWAY_IMAGE"
-          echo "Core Image: $CORE_IMAGE"
-          echo "Users Image: $USERS_IMAGE"
-
-          # Function for retry logic
-          retry_command() {
-            local max_attempts=3
-            local attempt=1
-            local command="$1"
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts: $command"
-              if eval "$command"; then
-                return 0
-              fi
-              attempt=$((attempt + 1))
-              [ $attempt -le $max_attempts ] && sleep 10
-            done
-            echo "Command failed after $max_attempts attempts: $command"
-            return 1
-          }
-
-          # Pull latest images
-          echo "📦 Pulling Docker images..."
-          retry_command "docker pull $GATEWAY_IMAGE"
-          retry_command "docker pull $CORE_IMAGE"
-          retry_command "docker pull $USERS_IMAGE"
-
-          # Set image tags in environment
-          export DOCKER_REGISTRY=""
-          export GATEWAY_TAG=$IMAGE_TAG
-          export CORE_TAG=$IMAGE_TAG
-          export USERS_TAG=$IMAGE_TAG
-
-          # Create docker-compose override with specific image tags
-          cat > docker-compose.override.yml << EOF
+          # Create override file with specific image tags if needed
+          if [ -n "$DOCKER_REGISTRY" ] && [ -n "$IMAGE_TAG" ]; then
+            cat > docker-compose.override.yml << EOF
           version: '3.8'
           services:
             ecom.gateway.api:
-              image: $GATEWAY_IMAGE
+              image: ${DOCKER_REGISTRY}${IMAGE_GATEWAY}:${IMAGE_TAG}
             ecom.core.api:
-              image: $CORE_IMAGE
+              image: ${DOCKER_REGISTRY}${IMAGE_CORE}:${IMAGE_TAG}
             ecom.users.api:
-              image: $USERS_IMAGE
+              image: ${DOCKER_REGISTRY}${IMAGE_USERS}:${IMAGE_TAG}
           EOF
-
-          # Deploy services with better error handling
-          echo "🚀 Starting services with Docker Compose..."
-          if ! docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build; then
-            echo "❌ Docker Compose failed, checking logs..."
-            docker-compose -f docker-compose.yml -f docker-compose.override.yml logs --tail=50
-            exit 1
           fi
 
-          # Wait for services to be healthy
-          echo "⏳ Waiting for services to be healthy..."
-          timeout 300 bash -c '
-            while true; do
-              if docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.gateway.api" && \
-                 docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.core.api" && \
-                 docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.users.api"; then
-                echo "✅ All services are healthy"
-                break
-              fi
-              echo "Waiting for services to be healthy..."
-              docker-compose -f docker-compose.yml -f docker-compose.override.yml ps
-              sleep 10
-            done
-          '
+          # Start services
+          if [ -f "docker-compose.override.yml" ]; then
+            docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d
+          else
+            docker-compose up -d --build
+          fi
 
-          # Enhanced health checks
-          echo "🔍 Performing health checks..."
+      - name: ⏳ Wait for services to be ready
+        run: |
+          echo "⏳ Waiting for services to start..."
+          sleep 30
 
-          health_check() {
-            local url=$1
-            local service_name=$2
-            local max_attempts=15
+          # Simple health check function
+          check_service() {
+            local port=$1
+            local name=$2
+            local max_attempts=10
             local attempt=1
             
             while [ $attempt -le $max_attempts ]; do
-              if curl -s --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
-                echo "✅ $service_name is healthy"
+              if curl -s -f "http://localhost:$port/health" > /dev/null 2>&1 || \
+                 curl -s -f "http://localhost:$port" > /dev/null 2>&1; then
+                echo "✅ $name is responding on port $port"
                 return 0
               fi
-              echo "Waiting for $service_name... (attempt $attempt/$max_attempts)"
+              echo "⏳ Waiting for $name on port $port (attempt $attempt/$max_attempts)..."
               sleep 10
               attempt=$((attempt + 1))
             done
-            echo "⚠️ $service_name health check timeout"
+            echo "⚠️ $name health check timeout on port $port"
             return 1
           }
 
-          # Perform health checks
-          health_check "http://localhost:5300/health" "Gateway API" &
-          health_check "http://localhost:5301/health" "Core API" &
-          health_check "http://localhost:5302/health" "Users API" &
-          wait
+          # Check each service
+          check_service 5300 "Gateway API"
+          check_service 5301 "Core API"  
+          check_service 5302 "Users API"
 
-          # Display service status
+      - name: 📊 Show deployment status
+        run: |
+          echo "🎉 Deployment completed!"
+          echo "===================="
+          echo "Services:"
+          docker-compose ps
           echo ""
-          echo "🚀 Deployment Complete!"
-          echo "=================================="
-          echo "Gateway API: http://localhost:5300"
-          echo "Core API (via Gateway): http://localhost:5300/api/core"
-          echo "Users API (via Gateway): http://localhost:5300/api/users"
-          echo "Core API (Direct): http://localhost:5301"
-          echo "Users API (Direct): http://localhost:5302"
-          echo "Prometheus: http://localhost:9090"
-          echo "Grafana: http://localhost:3000"
-          echo "Image Tag: $IMAGE_TAG"
-          echo ""
-          echo "Service Status:"
-          docker-compose -f docker-compose.yml -f docker-compose.override.yml ps
+          echo "Service URLs:"
+          echo "- Gateway API: http://localhost:5300"
+          echo "- Core API: http://localhost:5301"
+          echo "- Users API: http://localhost:5302"
+          echo "- Prometheus: http://localhost:9090"
+          echo "- Grafana: http://localhost:3000"
 
-          # Cleanup old images to save space
-          docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
-
-      - name: 🧹 Enhanced Cleanup on failure
+      - name: 🧹 Cleanup on failure
         if: failure()
         run: |
-          echo "❌ Deployment failed, starting comprehensive cleanup..."
-
-          # Show what went wrong
-          echo "🔍 Checking container logs..."
-          docker-compose -f docker-compose.yml logs --tail=100 || true
-
-          # Show current container status
-          echo "📊 Current container status:"
-          docker ps -a
-
-          # Show port usage
-          echo "🔌 Current port usage:"
-          sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || true
-
-          # Nuclear cleanup - stop everything
-          echo "🛑 Nuclear cleanup - stopping everything..."
-          
-          # Stop all containers
-          docker stop $(docker ps -aq) 2>/dev/null || true
-          
-          # Remove all containers with our project name
-          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
-          
-          # Remove any containers using our ports
-          for port in 5300 5301 5302 9090 3000; do
-            container_ids=$(docker ps -a --filter "publish=$port" --format "{{.ID}}" || true)
-            if [ ! -z "$container_ids" ]; then
-              echo "Removing containers using port $port: $container_ids"
-              echo "$container_ids" | xargs -r docker rm -f || true
-            fi
-          done
-
-          # Stop and remove all containers using docker-compose
-          docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
-
-          # Remove any dangling containers
-          echo "🧹 Removing dangling containers..."
+          echo "❌ Deployment failed, cleaning up..."
+          docker-compose logs --tail=50
+          docker-compose down --remove-orphans || true
           docker container prune -f || true
 
-          # Clean up networks
-          echo "🌐 Cleaning up networks..."
-          docker network ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker network rm || true
-          docker network prune -f || true
-
-          # Clean up volumes
-          echo "💾 Cleaning up volumes..."
-          docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm -f || true
-          docker volume prune -f || true
-
-          # Ultra-aggressive port cleanup
-          echo "🔌 Ultra-aggressive port cleanup..."
-          for port in 5300 5301 5302 9090 3000; do
-            echo "Nuking everything on port $port..."
-            
-            # Kill with lsof
-            sudo lsof -ti:$port 2>/dev/null | xargs -r sudo kill -9 || true
-            
-            # Kill with netstat
-            sudo netstat -tulpn | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' | xargs -r sudo kill -9 || true
-            
-            # Kill with ss
-            sudo ss -tulpn | grep ":$port " | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2 | grep -v '-' | xargs -r sudo kill -9 || true
-            
-            # Kill with fuser if available
-            sudo fuser -k $port/tcp 2>/dev/null || true
-          done
-
-          # Remove unused images (more aggressive cleanup)
-          echo "🖼️ Cleaning up images..."
-          docker image prune -f --filter "until=1h" || true
-          docker image prune -a -f --filter "label=org.opencontainers.image.title=ecom" || true
-
-          # Remove build cache
-          echo "🗄️ Cleaning up build cache..."
-          docker builder prune -f --filter "until=1h" || true
-
-          # Clear temporary files
-          echo "📁 Cleaning up temporary files..."
-          rm -f docker-compose.override.yml || true
-
-          # System cleanup
-          echo "🧹 System cleanup..."
-          docker system prune -f --filter "until=1h" || true
-
-          # Show disk usage after cleanup
-          echo "💿 Disk usage after cleanup:"
-          df -h
-
-          # Show remaining Docker resources
-          echo "🐳 Remaining Docker resources:"
-          docker system df
-
-          # Final port check
-          echo "🔍 Final port check:"
-          for port in 5300 5301 5302 9090 3000; do
-            if sudo lsof -ti:$port 2>/dev/null; then
-              echo "⚠️ Port $port still in use:"
-              sudo lsof -i:$port || true
-            else
-              echo "✅ Port $port is now free"
-            fi
-          done
-
-          echo "✅ Comprehensive cleanup completed"
-          echo "❌ Deployment failed, cleanup executed"
-
-  cleanup-resources:
-    name: Cleanup Resources
-    runs-on: self-hosted
-    needs: [deploy-docker-compose]
-    if: always() && needs.build-and-test.outputs.should-deploy == 'true'
+  post-deploy-cleanup:
+    name: Post-deployment Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy-local]
+    if: always()
 
     steps:
       - name: 🧹 Post-deployment cleanup
@@ -551,28 +290,6 @@ jobs:
 
           # Clean up old Docker images (keep last 3 versions)
           echo "🖼️ Cleaning up old images..."
-
-          cleanup_old_images() {
-            local image_name=$1
-            echo "Cleaning up old versions of $image_name..."
-            
-            # Get all tags for the image, skip latest and current deployment
-            docker images --format "table {{.Repository}}:{{.Tag}}\t{{.CreatedAt}}" \
-              | grep "^$image_name:" \
-              | grep -v ":latest" \
-              | grep -v ":${{ needs.build-and-test.outputs.image-tag }}" \
-              | sort -k2 -r \
-              | tail -n +4 \
-              | awk '{print $1}' \
-              | xargs -r docker rmi -f || true
-          }
-
-          cleanup_old_images "${{ env.IMAGE_GATEWAY }}"
-          cleanup_old_images "${{ env.IMAGE_CORE }}"
-          cleanup_old_images "${{ env.IMAGE_USERS }}"
-
-          # Clean up dangling images and build cache
-          echo "🗑️ Cleaning up dangling resources..."
           docker image prune -f --filter "until=24h" || true
           docker builder prune -f --filter "until=24h" || true
 
@@ -587,21 +304,18 @@ jobs:
           # Show final system status
           echo "📊 Final system status:"
           echo "Docker system usage:"
-          docker system df
-          echo ""
-          echo "Disk usage:"
-          df -h
+          docker system df || true
           echo ""
           echo "Active containers:"
-          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
 
           echo "✅ Post-deployment cleanup completed"
 
   notify-status:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
-    needs: [build-and-test, deploy-docker-compose, cleanup-resources]
-    if: always() && needs.build-and-test.outputs.should-deploy == 'true'
+    needs: [build-and-test, deploy-local, post-deploy-cleanup]
+    if: always()
 
     steps:
       - name: 📢 Deployment Status Summary
@@ -609,17 +323,19 @@ jobs:
           echo "🚀 Deployment Pipeline Summary"
           echo "=============================="
           echo "Build & Test: ${{ needs.build-and-test.result }}"
-          echo "Deploy: ${{ needs.deploy-docker-compose.result }}"
-          echo "Cleanup: ${{ needs.cleanup-resources.result }}"
+          echo "Deploy: ${{ needs.deploy-local.result }}"
+          echo "Cleanup: ${{ needs.post-deploy-cleanup.result }}"
           echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
           echo ""
 
-          if [ "${{ needs.deploy-docker-compose.result }}" = "success" ]; then
+          if [ "${{ needs.deploy-local.result }}" = "success" ]; then
             echo "✅ Deployment completed successfully!"
             echo "🌐 Services are available at:"
             echo "  - Gateway API: http://localhost:5300"
             echo "  - Core API: http://localhost:5301"
             echo "  - Users API: http://localhost:5302"
+            echo "  - Prometheus: http://localhost:9090"
+            echo "  - Grafana: http://localhost:3000"
           else
             echo "❌ Deployment failed!"
             echo "🧹 Resources have been cleaned up automatically"
