@@ -8,6 +8,7 @@ This project follows a **microservices architecture** with **Clean Architecture*
 
 ### Services
 
+- **Ecom.Gateway** - API Gateway with YARP for request routing and load balancing
 - **Ecom.Users** - User management and authentication service
 - **EcomCore** - Core e-commerce functionality (products, categories, reviews)
 - **AspireHost** - .NET Aspire orchestration host
@@ -15,6 +16,7 @@ This project follows a **microservices architecture** with **Clean Architecture*
 ### Technology Stack
 
 - **.NET 9** - Latest .NET framework
+- **YARP (Yet Another Reverse Proxy)** - High-performance reverse proxy for API Gateway
 - **PostgreSQL** - Primary database for both services
 - **Entity Framework Core** - ORM with Code First approach
 - **JWT Authentication** - Secure token-based authentication
@@ -62,9 +64,9 @@ This project follows a **microservices architecture** with **Clean Architecture*
 
 ```
 Moclaw.Ecommerce/
-├── AspireHost/                 # .NET Aspire orchestration
-│   ├── AspireHost/            # Main orchestration project
-│   └── ServiceDefaults1/      # Shared service configurations
+├── Ecom.Gateway/              # API Gateway microservice
+│   └── src/
+│       └── Ecom.Gateway.API/         # YARP-based API Gateway
 ├── Ecom.Users/                # User management microservice
 │   ├── src/
 │   │   ├── Ecom.Users.API/           # API layer
@@ -73,13 +75,13 @@ Moclaw.Ecommerce/
 │   │   ├── Ecom.Users.Infrastructure/ # Data access & external services
 │   │   └── Ecom.Users.Shared/        # Shared DTOs and contracts
 │   └── test/                         # Unit tests
-├── EcomCore/                  # E-commerce core microservice
+├── Ecom.Core/                 # E-commerce core microservice
 │   ├── src/
-│   │   ├── EcomCore.API/             # API layer
-│   │   ├── EcomCore.Application/     # Application layer (CQRS)
-│   │   ├── EcomCore.Domain/          # Domain entities
-│   │   ├── EcomCore.Infrastructure/  # Data access & external services
-│   │   └── EcomCore.Shared/          # Shared DTOs and contracts
+│   │   ├── Ecom.Core.API/            # API layer
+│   │   ├── Ecom.Core.Application/    # Application layer (CQRS)
+│   │   ├── Ecom.Core.Domain/         # Domain entities
+│   │   ├── Ecom.Core.Infrastructure/ # Data access & external services
+│   │   └── Ecom.Core.Shared/         # Shared DTOs and contracts
 │   └── test/                         # Unit tests
 ├── docker-compose.yml         # Container orchestration
 └── Moclaw.Ecommerce.sln      # Solution file
@@ -109,6 +111,13 @@ Moclaw.Ecommerce/
 - [Docker Desktop](https://www.docker.com/products/docker-desktop)
 - [PostgreSQL](https://www.postgresql.org/) (if running locally)
 
+## 🚀 Quick Start
+
+### Prerequisites
+- [.NET 9.0 SDK](https://dotnet.microsoft.com/download)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+
 ### Running with Docker Compose
 
 1. **Clone the repository**
@@ -117,15 +126,40 @@ Moclaw.Ecommerce/
    cd Moclaw.Ecommerce
    ```
 
-2. **Start the services**
+2. **Start all services**
    ```bash
-   docker-compose up -d
+   docker-compose up -d --build
    ```
 
 3. **Access the services**
-   - User Service API: `http://localhost:5001`
-   - EcomCore API: `http://localhost:5002`
-   - Swagger Documentation: Available at each service's `/swagger` endpoint
+   - **Gateway API**: http://localhost:5300
+   - **Core API (via Gateway)**: http://localhost:5300/api/core
+   - **Users API (via Gateway)**: http://localhost:5300/api/users
+   - **Core API (Direct)**: http://localhost:5301
+   - **Users API (Direct)**: http://localhost:5302
+   - **Prometheus**: http://localhost:9090
+   - **Grafana**: http://localhost:3000
+
+4. **Stop all services**
+   ```bash
+   docker-compose down
+   ```
+
+### Alternative: Using Makefile
+
+```bash
+# Build and deploy all services
+make deploy
+
+# Check service status
+make status
+
+# View logs
+make logs
+
+# Clean up
+make clean
+```
 
 ### Running Locally
 

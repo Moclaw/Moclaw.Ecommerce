@@ -1,15 +1,14 @@
 # Makefile for Ecommerce Microservices
 
-.PHONY: help setup build test deploy clean status logs
+.PHONY: help build test deploy clean status logs
 
 # Default target
 help:
 	@echo "Ecommerce Microservices - Available commands:"
 	@echo ""
-	@echo "  setup           - Setup Minikube cluster with 2 nodes"
 	@echo "  build           - Build Docker images"
 	@echo "  test            - Run all tests"
-	@echo "  deploy          - Deploy services to Minikube"
+	@echo "  deploy          - Deploy services with Docker Compose"
 	@echo "  status          - Show deployment status"
 	@echo "  logs            - Show service logs"
 	@echo "  clean           - Clean up resources"
@@ -17,86 +16,81 @@ help:
 	@echo "  local-stop      - Stop local development environment"
 	@echo ""
 
-# Setup Minikube cluster
-setup:
-	@echo "🚀 Setting up Minikube cluster..."
-	chmod +x setup-minikube.sh
-	./setup-minikube.sh
-
 # Build Docker images
 build:
 	@echo "🔨 Building Docker images..."
-	eval $$(minikube docker-env --profile=ecommerce-cluster) && \
-	docker build -t ecom-core-api:latest -f Ecom.Core/src/Ecom.Core.API/Dockerfile . && \
-	docker build -t ecom-users-api:latest -f Ecom.Users/src/Ecom.Users.API/Dockerfile .
+	docker-compose build
 
 # Run tests
 test:
 	@echo "🧪 Running tests..."
-	dotnet test Ecom.Core/test/EcomCore.Application.UnitTests/EcomCore.Application.UnitTests.csproj --configuration Release
-	dotnet test Ecom.Core/test/EcomCore.Domain.UnitTests/EcomCore.Domain.UnitTests.csproj --configuration Release
-	dotnet test Ecom.Core/test/EcomCore.Infrastructure.UnitTests/EcomCore.Infrastructure.UnitTests.csproj --configuration Release
-	dotnet test Ecom.Users/test/Ecom.Users.Application.UnitTests/Ecom.Users.Application.UnitTests.csproj --configuration Release
-	dotnet test Ecom.Users/test/Ecom.Users.Domain.UnitTests/Ecom.Users.Domain.UnitTests.csproj --configuration Release
-	dotnet test Ecom.Users/test/Ecom.Users.Infrastructure.UnitTests/Ecom.Users.Infrastructure.UnitTests.csproj --configuration Release
+	dotnet test --configuration Release --verbosity minimal
 
-# Deploy to Minikube
+# Deploy services with Docker Compose
 deploy:
-	@echo "🚀 Deploying to Minikube..."
-	chmod +x deploy.sh
-	./deploy.sh
+	@echo "🚀 Deploying services with Docker Compose..."
+	docker-compose up -d --build
+	@echo ""
+	@echo "Services available at:"
+	@echo "  Gateway API: http://localhost:5300"
+	@echo "  Core API (via Gateway): http://localhost:5300/api/core"
+	@echo "  Users API (via Gateway): http://localhost:5300/api/users"
+	@echo "  Core API (Direct): http://localhost:5301"
+	@echo "  Users API (Direct): http://localhost:5302"
+	@echo "  Prometheus: http://localhost:9090"
+	@echo "  Grafana: http://localhost:3000"
 
 # Show deployment status
 status:
-	@echo "📊 Deployment Status:"
-	@echo "===================="
-	kubectl get nodes --show-labels
-	@echo ""
-	kubectl get deployments -n ecommerce
-	@echo ""
-	kubectl get pods -n ecommerce -o wide
-	@echo ""
-	kubectl get services -n ecommerce
-	@echo ""
-	kubectl get ingress -n ecommerce
+	@echo "📊 Checking service status..."
+	docker-compose ps
 
 # Show service logs
 logs:
-	@echo "📋 Service Logs:"
-	@echo "================"
-	@echo "Core API logs:"
-	kubectl logs -l app=ecom-core-api -n ecommerce --tail=50
-	@echo ""
-	@echo "Users API logs:"
-	kubectl logs -l app=ecom-users-api -n ecommerce --tail=50
+	@echo "📋 Showing service logs..."
+	docker-compose logs -f
 
 # Clean up resources
 clean:
 	@echo "🧹 Cleaning up resources..."
-	kubectl delete namespace ecommerce --ignore-not-found=true
-	minikube delete --profile=ecommerce-cluster || true
+	docker-compose down --volumes --remove-orphans
 	docker image prune -f
 
 # Start local development environment
 local-dev:
 	@echo "🔧 Starting local development environment..."
-	docker-compose -f docker-compose.local.yml up -d --build
+	docker-compose -f docker-compose.yml up -d --build
 	@echo ""
 	@echo "Services available at:"
-	@echo "  Core API: http://localhost:5001"
-	@echo "  Users API: http://localhost:5002"
-	@echo "  Gateway: http://localhost:80"
+	@echo "  Gateway API: http://localhost:5300"
+	@echo "  Core API (via Gateway): http://localhost:5300/api/core"
+	@echo "  Users API (via Gateway): http://localhost:5300/api/users"
+	@echo "  Core API (Direct): http://localhost:5301"
+	@echo "  Users API (Direct): http://localhost:5302"
+	@echo "  Prometheus: http://localhost:9090"
+	@echo "  Grafana: http://localhost:3000"
 
 # Stop local development environment
 local-stop:
 	@echo "🛑 Stopping local development environment..."
-	docker-compose -f docker-compose.local.yml down
+	docker-compose down
 
-# Port forward services for testing
-port-forward:
-	@echo "🔗 Setting up port forwarding..."
-	kubectl port-forward -n ecommerce service/ecom-core-service 8080:80 &
-	kubectl port-forward -n ecommerce service/ecom-users-service 8081:80 &
-	@echo "Services available at:"
-	@echo "  Core API: http://localhost:8080"
-	@echo "  Users API: http://localhost:8081"
+# Health checks
+health-check:
+	@echo "� Performing health checks..."
+	@curl -s http://localhost:5300/health && echo "✅ Gateway API: Healthy" || echo "❌ Gateway API: Failed"
+	@curl -s http://localhost:5301/health && echo "✅ Core API: Healthy" || echo "❌ Core API: Failed"
+	@curl -s http://localhost:5302/health && echo "✅ Users API: Healthy" || echo "❌ Users API: Failed"
+
+# Restart specific service
+restart-gateway:
+	@echo "🔄 Restarting Gateway service..."
+	docker-compose restart ecom.gateway.api
+
+restart-core:
+	@echo "🔄 Restarting Core API service..."
+	docker-compose restart ecom.core.api
+
+restart-users:
+	@echo "🔄 Restarting Users API service..."
+	docker-compose restart ecom.users.api

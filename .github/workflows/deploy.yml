@@ -10,10 +10,9 @@ env:
   REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
   REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
   REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+  IMAGE_GATEWAY: moclaw/ecom-gateway-api
   IMAGE_CORE: moclaw/ecom-core-api
   IMAGE_USERS: moclaw/ecom-users-api
-  KUBE_NAMESPACE: ecommerce
-  KUBECTL_TIMEOUT: 300s
   HEALTH_CHECK_TIMEOUT: 180s
 
 jobs:
@@ -40,7 +39,7 @@ jobs:
             echo "should-deploy=true" >> $GITHUB_OUTPUT
             echo "Main branch - will deploy"
           else
-            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile)$|^k8s/"; then
+            if git diff --name-only HEAD~1 HEAD | grep -E "\\.(cs|csproj|sln|Dockerfile|yml|yaml)$"; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "Source code changes detected - will deploy"
             else
@@ -94,6 +93,9 @@ jobs:
     strategy:
       matrix:
         service:
+          - name: gateway-api
+            dockerfile: Ecom.Gateway/src/Ecom.Gateway.API/Dockerfile
+            image_name: moclaw/ecom-gateway-api
           - name: core-api
             dockerfile: Ecom.Core/src/Ecom.Core.API/Dockerfile
             image_name: moclaw/ecom-core-api
@@ -101,7 +103,7 @@ jobs:
             dockerfile: Ecom.Users/src/Ecom.Users.API/Dockerfile
             image_name: moclaw/ecom-users-api
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
 
     steps:
       - name: 📥 Checkout code
@@ -132,8 +134,8 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
-  deploy-minikube:
-    name: Deploy to Minikube
+  deploy-docker-compose:
+    name: Deploy with Docker Compose
     runs-on: self-hosted
     needs: [build-and-test, build-images]
     if: needs.build-and-test.outputs.should-deploy == 'true'
@@ -149,8 +151,9 @@ jobs:
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      - name: 🚀 Deploy to Minikube
+      - name: 🚀 Deploy with Docker Compose
         env:
+          GATEWAY_IMAGE: ${{ env.IMAGE_GATEWAY }}:${{ needs.build-and-test.outputs.image-tag }}
           CORE_IMAGE: ${{ env.IMAGE_CORE }}:${{ needs.build-and-test.outputs.image-tag }}
           USERS_IMAGE: ${{ env.IMAGE_USERS }}:${{ needs.build-and-test.outputs.image-tag }}
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
@@ -160,10 +163,10 @@ jobs:
           # Set error handling
           trap 'echo "❌ Deployment failed at line $LINENO"' ERR
 
-          echo "🚀 Starting deployment..."
+          echo "🚀 Starting Docker Compose deployment..."
+          echo "Gateway Image: $GATEWAY_IMAGE"
           echo "Core Image: $CORE_IMAGE"
           echo "Users Image: $USERS_IMAGE"
-          echo "Namespace: $KUBE_NAMESPACE"
 
           # Function for retry logic
           retry_command() {
@@ -183,207 +186,54 @@ jobs:
             return 1
           }
 
-          # Install cri-dockerd if running as root and using none driver
-          install_cri_dockerd() {
-            if command -v cri-dockerd >/dev/null 2>&1; then
-              echo "✅ cri-dockerd already installed"
-              return 0
-            fi
-            
-            echo "📦 Installing cri-dockerd..."
-            
-            # Download and install cri-dockerd
-            CRI_DOCKERD_VERSION="0.3.8"
-            wget -q "https://github.com/Mirantis/cri-dockerd/releases/download/v${CRI_DOCKERD_VERSION}/cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
-            tar xzf "cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
-            sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
-            rm -rf cri-dockerd*
-            
-            # Create systemd service files
-            sudo tee /etc/systemd/system/cri-docker.service > /dev/null <<EOF
-          [Unit]
-          Description=CRI Interface for Docker Application Container Engine
-          Documentation=https://docs.mirantis.com
-          After=network-online.target firewalld.service docker.service
-          Wants=network-online.target
-          Requires=cri-docker.socket
+          # Pull latest images
+          echo "📦 Pulling Docker images..."
+          retry_command "docker pull $GATEWAY_IMAGE"
+          retry_command "docker pull $CORE_IMAGE"
+          retry_command "docker pull $USERS_IMAGE"
 
-          [Service]
-          Type=notify
-          ExecStart=/usr/local/bin/cri-dockerd --container-runtime-endpoint fd://
-          ExecReload=/bin/kill -s HUP \$MAINPID
-          TimeoutSec=0
-          RestartSec=2
-          Restart=always
+          # Stop existing containers
+          echo "🛑 Stopping existing containers..."
+          docker-compose -f docker-compose.yml down --remove-orphans || true
 
-          [Install]
-          WantedBy=multi-user.target
+          # Set image tags in environment
+          export DOCKER_REGISTRY=""
+          export GATEWAY_TAG=$IMAGE_TAG
+          export CORE_TAG=$IMAGE_TAG
+          export USERS_TAG=$IMAGE_TAG
+
+          # Create docker-compose override with specific image tags
+          cat > docker-compose.override.yml << EOF
+          services:
+            ecom.gateway.api:
+              image: $GATEWAY_IMAGE
+            ecom.core.api:
+              image: $CORE_IMAGE
+            ecom.users.api:
+              image: $USERS_IMAGE
           EOF
 
-            sudo tee /etc/systemd/system/cri-docker.socket > /dev/null <<EOF
-          [Unit]
-          Description=CRI Docker Socket for the API
-          PartOf=cri-docker.service
+          # Deploy services
+          echo "🚀 Starting services with Docker Compose..."
+          docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build
 
-          [Socket]
-          ListenStream=%t/cri-dockerd.sock
-          SocketMode=0660
-          SocketUser=root
-          SocketGroup=docker
+          # Wait for services to be healthy
+          echo "⏳ Waiting for services to be healthy..."
+          timeout 300 bash -c '
+            while true; do
+              if docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.gateway.api" && \
+                 docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.core.api" && \
+                 docker-compose -f docker-compose.yml -f docker-compose.override.yml ps | grep -q "Up (healthy).*ecom.users.api"; then
+                echo "✅ All services are healthy"
+                break
+              fi
+              echo "Waiting for services to be healthy..."
+              sleep 10
+            done
+          '
 
-          [Install]
-          WantedBy=sockets.target
-          EOF
-
-            # Enable and start cri-dockerd
-            sudo systemctl daemon-reload
-            sudo systemctl enable cri-docker.service
-            sudo systemctl enable cri-docker.socket
-            sudo systemctl start cri-docker.service
-            sudo systemctl start cri-docker.socket
-            
-            echo "✅ cri-dockerd installed and started"
-          }
-
-          # Check/Start Minikube with retry
-          echo "Checking Minikube status..."
-          if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
-            echo "Starting Minikube cluster..."
-            minikube delete 2>/dev/null || true
-            
-            # Use appropriate driver based on environment
-            if [ "$(id -u)" -eq 0 ]; then
-              echo "Running as root, using none driver with containerd"
-              
-              # Install cri-dockerd if needed
-              install_cri_dockerd
-              
-              # Use containerd runtime instead of docker to avoid cri-dockerd issues
-              retry_command "minikube start --driver=none --container-runtime=containerd --kubernetes-version=v1.28.3 --wait=all"
-            else
-              echo "Running as non-root, using docker driver"
-              retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
-            fi
-            
-            minikube addons enable ingress
-            kubectl wait --for=condition=Ready nodes --all --timeout=180s
-          fi
-
-          MINIKUBE_IP=$(minikube ip)
-          echo "Minikube IP: $MINIKUBE_IP"
-
-          # Optimized image handling
-          echo "Managing Docker images..."
-
-          # Check if images exist locally first
-          if ! docker image inspect "$CORE_IMAGE" >/dev/null 2>&1; then
-            echo "Pulling Core API image..."
-            retry_command "docker pull $CORE_IMAGE"
-          fi
-
-          if ! docker image inspect "$USERS_IMAGE" >/dev/null 2>&1; then
-            echo "Pulling Users API image..."
-            retry_command "docker pull $USERS_IMAGE"
-          fi
-
-          # Load images to minikube efficiently (different approach for none driver)
-          if [ "$(id -u)" -eq 0 ]; then
-            echo "✅ Using none driver with containerd - images will be pulled directly by kubelet"
-            # For none driver with containerd, we need to tag images for containerd
-            sudo ctr -n k8s.io images import <(docker save "$CORE_IMAGE") || echo "Core image import failed, will pull from registry"
-            sudo ctr -n k8s.io images import <(docker save "$USERS_IMAGE") || echo "Users image import failed, will pull from registry"
-          else
-            if ! minikube image ls | grep -q "$IMAGE_TAG"; then
-              echo "Loading images to Minikube..."
-              minikube image load "$CORE_IMAGE" &
-              minikube image load "$USERS_IMAGE" &
-              wait
-              echo "✅ Images loaded to Minikube"
-            else
-              echo "✅ Images already present in Minikube"
-            fi
-          fi
-
-          # Deploy Kubernetes resources with better error handling
-          echo "Deploying Kubernetes resources..."
-
-          # Create namespace
-          kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-
-          # Apply configurations
-          [ -f k8s/secrets.yaml ] && kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
-          [ -f k8s/configmap.yaml ] && kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
-
-          # Deploy PostgreSQL if not exists
-          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
-            [ -f k8s/postgres/deployment.yaml ] && kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
-          fi
-
-          # Deploy APIs
-          [ -d k8s/core-api ] && kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
-          [ -d k8s/users-api ] && kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
-
-          # Update images
-          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE --record
-          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE --record
-
-          # Apply environment patches
-          kubectl patch deployment core-api -n $KUBE_NAMESPACE --type='merge' -p='{
-            "spec": {
-              "template": {
-                "spec": {
-                  "containers": [{
-                    "name": "core-api",
-                    "env": [
-                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
-                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
-                    ]
-                  }]
-                }
-              }
-            }
-          }' 2>/dev/null || echo "Core API patch already applied"
-
-          kubectl patch deployment users-api -n $KUBE_NAMESPACE --type='merge' -p='{
-            "spec": {
-              "template": {
-                "spec": {
-                  "containers": [{
-                    "name": "users-api",
-                    "env": [
-                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
-                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
-                    ]
-                  }]
-                }
-              }
-            }
-          }' 2>/dev/null || echo "Users API patch already applied"
-
-          # Wait for deployments with improved monitoring
-          echo "Waiting for deployments to be ready..."
-
-          # Wait for PostgreSQL first
-          if kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
-            if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
-              kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
-            fi
-          fi
-
-          # Wait for APIs in parallel
-          kubectl rollout status deployment/core-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
-          CORE_PID=$!
-          kubectl rollout status deployment/users-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
-          USERS_PID=$!
-
-          # Wait for both deployments
-          wait $CORE_PID && echo "✅ Core API deployment ready" || echo "❌ Core API deployment failed"
-          wait $USERS_PID && echo "✅ Users API deployment ready" || echo "❌ Users API deployment failed"
-
-          echo "✅ All deployments processed!"
-
-          # Enhanced health checks with proper error handling
-          echo "Performing health checks..."
+          # Enhanced health checks
+          echo "🔍 Performing health checks..."
 
           health_check() {
             local url=$1
@@ -404,29 +254,27 @@ jobs:
             return 1
           }
 
-          # Get the appropriate IP for health checks
-          if [ "$(id -u)" -eq 0 ]; then
-            # For none driver, use localhost or node IP
-            HEALTH_CHECK_IP="localhost"
-          else
-            # For docker driver, use minikube IP
-            HEALTH_CHECK_IP="$MINIKUBE_IP"
-          fi
-
-          health_check "http://$HEALTH_CHECK_IP:30301/" "Core API" &
-          health_check "http://$HEALTH_CHECK_IP:30302/" "Users API" &
+          # Perform health checks
+          health_check "http://localhost:5300/health" "Gateway API" &
+          health_check "http://localhost:5301/health" "Core API" &
+          health_check "http://localhost:5302/health" "Users API" &
           wait
 
-          # Final status report
+          # Display service status
           echo ""
           echo "🚀 Deployment Complete!"
           echo "=================================="
-          echo "Core API: http://$HEALTH_CHECK_IP:30301"
-          echo "Users API: http://$HEALTH_CHECK_IP:30302"
+          echo "Gateway API: http://localhost:5300"
+          echo "Core API (via Gateway): http://localhost:5300/api/core"
+          echo "Users API (via Gateway): http://localhost:5300/api/users"
+          echo "Core API (Direct): http://localhost:5301"
+          echo "Users API (Direct): http://localhost:5302"
+          echo "Prometheus: http://localhost:9090"
+          echo "Grafana: http://localhost:3000"
           echo "Image Tag: $IMAGE_TAG"
           echo ""
-          echo "Pod Status:"
-          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print "  " $1": "$3}'
+          echo "Service Status:"
+          docker-compose -f docker-compose.yml -f docker-compose.override.yml ps
 
           # Cleanup old images to save space
           docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
@@ -434,281 +282,7 @@ jobs:
       - name: 🧹 Cleanup on failure
         if: failure()
         run: |
-          kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
-          docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
-
-          # Set error handling
-          trap 'echo "❌ Deployment failed at line $LINENO"' ERR
-
-          # Export variables for remote execution with validation
-          export CORE_IMAGE="${{ env.IMAGE_CORE }}:${{ env.IMAGE_TAG }}"
-          export USERS_IMAGE="${{ env.IMAGE_USERS }}:${{ env.IMAGE_TAG }}"
-          export KUBE_NAMESPACE="${{ env.KUBE_NAMESPACE }}"
-          export KUBECTL_TIMEOUT="${{ env.KUBECTL_TIMEOUT }}"
-          export REGISTRY_URL="${{ env.REGISTRY_URL }}"
-          export REGISTRY_USERNAME="${{ env.REGISTRY_USERNAME }}"
-          export REGISTRY_PASSWORD="${{ env.REGISTRY_PASSWORD }}"
-
-          # Validate required variables
-          for var in CORE_IMAGE USERS_IMAGE KUBE_NAMESPACE KUBECTL_TIMEOUT REGISTRY_URL REGISTRY_USERNAME REGISTRY_PASSWORD; do
-            if [ -z "${!var}" ]; then
-              echo "❌ Required variable $var is not set"
-              exit 1
-            fi
-          done
-
-          echo "🚀 Starting deployment on remote server..."
-          echo "Core Image: $CORE_IMAGE"
-          echo "Users Image: $USERS_IMAGE"
-          echo "Namespace: $KUBE_NAMESPACE"
-
-          # Function for retry logic
-          retry_command() {
-            local max_attempts=3
-            local attempt=1
-            local command="$1"
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts: $command"
-              if eval "$command"; then
-                return 0
-              fi
-              attempt=$((attempt + 1))
-              [ $attempt -le $max_attempts ] && sleep 10
-            done
-            echo "Command failed after $max_attempts attempts: $command"
-            return 1
-          }
-
-          # Install cri-dockerd if running as root and using none driver
-          install_cri_dockerd() {
-            if command -v cri-dockerd >/dev/null 2>&1; then
-              echo "✅ cri-dockerd already installed"
-              return 0
-            fi
-            
-            echo "📦 Installing cri-dockerd..."
-            
-            # Download and install cri-dockerd
-            CRI_DOCKERD_VERSION="0.3.8"
-            wget -q "https://github.com/Mirantis/cri-dockerd/releases/download/v${CRI_DOCKERD_VERSION}/cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
-            tar xzf "cri-dockerd-${CRI_DOCKERD_VERSION}.amd64.tgz"
-            sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
-            rm -rf cri-dockerd*
-            
-            # Create systemd service files
-            sudo tee /etc/systemd/system/cri-docker.service > /dev/null <<EOF
-          [Unit]
-          Description=CRI Interface for Docker Application Container Engine
-          Documentation=https://docs.mirantis.com
-          After=network-online.target firewalld.service docker.service
-          Wants=network-online.target
-          Requires=cri-docker.socket
-
-          [Service]
-          Type=notify
-          ExecStart=/usr/local/bin/cri-dockerd --container-runtime-endpoint fd://
-          ExecReload=/bin/kill -s HUP \$MAINPID
-          TimeoutSec=0
-          RestartSec=2
-          Restart=always
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-
-            sudo tee /etc/systemd/system/cri-docker.socket > /dev/null <<EOF
-          [Unit]
-          Description=CRI Docker Socket for the API
-          PartOf=cri-docker.service
-
-          [Socket]
-          ListenStream=%t/cri-dockerd.sock
-          SocketMode=0660
-          SocketUser=root
-          SocketGroup=docker
-
-          [Install]
-          WantedBy=sockets.target
-          EOF
-
-            # Enable and start cri-dockerd
-            sudo systemctl daemon-reload
-            sudo systemctl enable cri-docker.service
-            sudo systemctl enable cri-docker.socket
-            sudo systemctl start cri-docker.service
-            sudo systemctl start cri-docker.socket
-            
-            echo "✅ cri-dockerd installed and started"
-          }
-
-          # Check/Start Minikube with retry
-          echo "Checking Minikube status..."
-          if ! (minikube status 2>/dev/null | grep -q "host: Running" && kubectl cluster-info 2>/dev/null); then
-            echo "Starting Minikube cluster..."
-            minikube delete 2>/dev/null || true
-            retry_command "minikube start --driver=docker --kubernetes-version=v1.28.3 --memory=4096 --cpus=2 --disk-size=15g --wait=all"
-            minikube addons enable ingress
-            kubectl wait --for=condition=Ready nodes --all --timeout=180s
-          fi
-
-          MINIKUBE_IP=$(minikube ip)
-          echo "Minikube IP: $MINIKUBE_IP"
-
-          # Login to Docker registry
-          echo "Logging into Docker registry..."
-          echo "$REGISTRY_PASSWORD" | docker login $REGISTRY_URL -u "$REGISTRY_USERNAME" --password-stdin
-
-          # Optimized image handling
-          echo "Managing Docker images..."
-
-          # Check if images exist locally first
-          if ! docker image inspect "$CORE_IMAGE" >/dev/null 2>&1; then
-            echo "Pulling Core API image..."
-            retry_command "docker pull $CORE_IMAGE"
-          fi
-
-          if ! docker image inspect "$USERS_IMAGE" >/dev/null 2>&1; then
-            echo "Pulling Users API image..."
-            retry_command "docker pull $USERS_IMAGE"
-          fi
-
-          # Load images to minikube efficiently
-          if ! minikube image ls | grep -q "${{ env.IMAGE_TAG }}"; then
-            echo "Loading images to Minikube..."
-            minikube image load "$CORE_IMAGE" &
-            minikube image load "$USERS_IMAGE" &
-            wait
-            echo "✅ Images loaded to Minikube"
-          else
-            echo "✅ Images already present in Minikube"
-          fi
-
-          # Deploy Kubernetes resources with better error handling
-          echo "Deploying Kubernetes resources..."
-          cd ~/deployment
-
-          # Create namespace
-          kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-
-          # Apply configurations
-          [ -f k8s/secrets.yaml ] && kubectl apply -f k8s/secrets.yaml -n $KUBE_NAMESPACE
-          [ -f k8s/configmap.yaml ] && kubectl apply -f k8s/configmap.yaml -n $KUBE_NAMESPACE
-
-          # Deploy PostgreSQL if not exists
-          if ! kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
-            [ -f k8s/postgres/deployment.yaml ] && kubectl apply -f k8s/postgres/deployment.yaml -n $KUBE_NAMESPACE
-          fi
-
-          # Deploy APIs
-          [ -d k8s/core-api ] && kubectl apply -f k8s/core-api/ -n $KUBE_NAMESPACE
-          [ -d k8s/users-api ] && kubectl apply -f k8s/users-api/ -n $KUBE_NAMESPACE
-
-          # Update images
-          kubectl set image deployment/core-api core-api=$CORE_IMAGE -n $KUBE_NAMESPACE --record
-          kubectl set image deployment/users-api users-api=$USERS_IMAGE -n $KUBE_NAMESPACE --record
-
-          # Apply environment patches
-          kubectl patch deployment core-api -n $KUBE_NAMESPACE --type='merge' -p='{
-            "spec": {
-              "template": {
-                "spec": {
-                  "containers": [{
-                    "name": "core-api",
-                    "env": [
-                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
-                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
-                    ]
-                  }]
-                }
-              }
-            }
-          }' 2>/dev/null || echo "Core API patch already applied"
-
-          kubectl patch deployment users-api -n $KUBE_NAMESPACE --type='merge' -p='{
-            "spec": {
-              "template": {
-                "spec": {
-                  "containers": [{
-                    "name": "users-api",
-                    "env": [
-                      {"name": "ASPNETCORE_ENVIRONMENT", "value": "Production"},
-                      {"name": "ASPNETCORE_URLS", "value": "http://+:8080"}
-                    ]
-                  }]
-                }
-              }
-            }
-          }' 2>/dev/null || echo "Users API patch already applied"
-
-          # Wait for deployments with improved monitoring
-          echo "Waiting for deployments to be ready..."
-
-          # Wait for PostgreSQL first
-          if kubectl get deployment postgres -n $KUBE_NAMESPACE >/dev/null 2>&1; then
-            if ! kubectl get pods -l app=postgres -n $KUBE_NAMESPACE -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q "Running"; then
-              kubectl rollout status deployment/postgres -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT
-            fi
-          fi
-
-          # Wait for APIs in parallel
-          kubectl rollout status deployment/core-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
-          CORE_PID=$!
-          kubectl rollout status deployment/users-api -n $KUBE_NAMESPACE --timeout=$KUBECTL_TIMEOUT &
-          USERS_PID=$!
-
-          # Wait for both deployments
-          wait $CORE_PID && echo "✅ Core API deployment ready" || echo "❌ Core API deployment failed"
-          wait $USERS_PID && echo "✅ Users API deployment ready" || echo "❌ Users API deployment failed"
-
-          echo "✅ All deployments processed!"
-
-          # Enhanced health checks with proper error handling
-          echo "Performing health checks..."
-
-          health_check() {
-            local url=$1
-            local service_name=$2
-            local max_attempts=15
-            local attempt=1
-            
-            while [ $attempt -le $max_attempts ]; do
-              if curl -s --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
-                echo "✅ $service_name is healthy"
-                return 0
-              fi
-              echo "Waiting for $service_name... (attempt $attempt/$max_attempts)"
-              sleep 10
-              attempt=$((attempt + 1))
-            done
-            echo "⚠️ $service_name health check timeout"
-            return 1
-          }
-
-          health_check "http://$MINIKUBE_IP:30301/" "Core API" &
-          health_check "http://$MINIKUBE_IP:30302/" "Users API" &
-          wait
-
-          # Final status report
-          echo ""
-          echo "🚀 Deployment Complete!"
-          echo "=================================="
-          echo "Core API: http://$MINIKUBE_IP:30301"
-          echo "Users API: http://$MINIKUBE_IP:30302"
-          echo "Image Tag: ${{ env.IMAGE_TAG }}"
-          echo ""
-          echo "Pod Status:"
-          kubectl get pods -n $KUBE_NAMESPACE --no-headers | awk '{print "  " $1": "$3}'
-
-          # Cleanup old images to save space
-          docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
-
-          EOF
-
-      - name: 🧹 Cleanup on failure
-        if: failure()
-        run: |
-          kubectl delete pods --field-selector=status.phase=Failed -n $KUBE_NAMESPACE --ignore-not-found=true
+          docker-compose -f docker-compose.yml down --remove-orphans || true
           docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
           echo "✅ Cleanup completed"
           echo "❌ Deployment failed, cleanup executed"

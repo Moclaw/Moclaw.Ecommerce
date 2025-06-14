@@ -1,4 +1,27 @@
 services:
+  ecom.gateway.api:
+    image: ${DOCKER_REGISTRY-}ecomgatewayapi
+    build:
+      context: .
+      dockerfile: Ecom.Gateway/src/Ecom.Gateway.API/Dockerfile
+    ports:
+      - "5300:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_LOGGING__LOGLEVEL__DEFAULT=Information
+    depends_on:
+      - ecom.core.api
+      - ecom.users.api
+    networks:
+      - ecommerce-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   ecom.core.api:
     image: ${DOCKER_REGISTRY-}ecomcoreapi
     build:
