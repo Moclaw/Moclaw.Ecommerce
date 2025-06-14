@@ -155,19 +155,23 @@ jobs:
         run: |
           echo "🧹 Starting pre-deployment cleanup..."
 
+          # Show current port usage before cleanup
+          echo "📊 Current port usage before cleanup:"
+          sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || echo "No processes found on target ports"
+
           # Force stop and remove all containers with our project name
           echo "🛑 Force stopping existing containers..."
-          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=10 || true
+          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=5 || true
           docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
 
-          # Kill processes using our ports
-          echo "🔌 Freeing up ports..."
+          # Also stop any containers that might be using our ports
+          echo "🛑 Stopping containers using target ports..."
           for port in 5300 5301 5302 9090 3000; do
-            echo "Checking port $port..."
-            if sudo lsof -ti:$port; then
-              echo "Killing processes on port $port"
-              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
-              sleep 2
+            container_ids=$(docker ps --filter "publish=$port" --format "{{.ID}}" || true)
+            if [ ! -z "$container_ids" ]; then
+              echo "Stopping containers using port $port: $container_ids"
+              echo "$container_ids" | xargs -r docker stop --time=5 || true
+              echo "$container_ids" | xargs -r docker rm -f || true
             fi
           done
 
@@ -188,6 +192,42 @@ jobs:
           echo "💾 Cleaning up volumes..."
           docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm || true
           docker volume prune -f || true
+
+          # More aggressive port cleanup
+          echo "🔌 Aggressive port cleanup..."
+          for port in 5300 5301 5302 9090 3000; do
+            echo "Force killing processes on port $port..."
+            
+            # Kill processes using lsof
+            if sudo lsof -ti:$port 2>/dev/null; then
+              echo "Found processes on port $port, killing them..."
+              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+            fi
+            
+            # Kill processes using netstat and kill
+            pids=$(sudo netstat -tulpn | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' || true)
+            if [ ! -z "$pids" ]; then
+              echo "Found additional PIDs on port $port: $pids"
+              echo "$pids" | xargs -r sudo kill -9 || true
+            fi
+            
+            # Kill processes using ss command as backup
+            pids=$(sudo ss -tulpn | grep ":$port " | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2 | grep -v '-' || true)
+            if [ ! -z "$pids" ]; then
+              echo "Found PIDs via ss on port $port: $pids"
+              echo "$pids" | xargs -r sudo kill -9 || true
+            fi
+            
+            sleep 1
+          done
+
+          # Wait longer for ports to be fully released
+          echo "⏳ Waiting for ports to be fully released..."
+          sleep 10
+
+          # Check for any remaining Docker processes that might interfere
+          echo "🐳 Checking for remaining Docker processes..."
+          docker ps -a | grep -E "(ecommerce|gateway|core|users)" | awk '{print $1}' | tail -n +2 | xargs -r docker rm -f || true
 
           # Verify monitoring directory exists
           echo "📁 Verifying monitoring configuration..."
@@ -222,19 +262,38 @@ jobs:
           EOF
           fi
 
-          # Wait a moment for ports to be fully released
-          echo "⏳ Waiting for ports to be released..."
-          sleep 5
-
-          # Verify ports are free
-          echo "🔍 Verifying ports are available..."
-          for port in 5300 5301 5302 9090 3000; do
-            if sudo lsof -ti:$port; then
-              echo "❌ Port $port is still in use!"
-              sudo lsof -i:$port
-              exit 1
+          # Final verification with multiple attempts
+          echo "🔍 Final port verification..."
+          for attempt in 1 2 3; do
+            echo "Verification attempt $attempt/3..."
+            all_ports_free=true
+            
+            for port in 5300 5301 5302 9090 3000; do
+              if sudo lsof -ti:$port 2>/dev/null; then
+                echo "❌ Port $port is still in use on attempt $attempt!"
+                sudo lsof -i:$port || true
+                all_ports_free=false
+                
+                # Force kill again
+                sudo lsof -ti:$port | xargs -r sudo kill -9 || true
+              else
+                echo "✅ Port $port is available"
+              fi
+            done
+            
+            if [ "$all_ports_free" = true ]; then
+              echo "✅ All ports are now available"
+              break
+            fi
+            
+            if [ $attempt -lt 3 ]; then
+              echo "⏳ Waiting before next attempt..."
+              sleep 5
             else
-              echo "✅ Port $port is available"
+              echo "❌ Some ports are still in use after 3 attempts!"
+              echo "📊 Current port usage:"
+              sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || true
+              echo "🔍 Attempting to continue deployment anyway..."
             fi
           done
 
@@ -387,10 +446,23 @@ jobs:
           echo "🔌 Current port usage:"
           sudo netstat -tulpn | grep -E ':5300|:5301|:5302|:9090|:3000' || true
 
-          # Force stop and remove all containers
-          echo "🛑 Force stopping and removing all containers..."
-          docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker stop --time=5 || true
+          # Nuclear cleanup - stop everything
+          echo "🛑 Nuclear cleanup - stopping everything..."
+          
+          # Stop all containers
+          docker stop $(docker ps -aq) 2>/dev/null || true
+          
+          # Remove all containers with our project name
           docker ps -a --filter "name=ecommerce" --format "{{.Names}}" | xargs -r docker rm -f || true
+          
+          # Remove any containers using our ports
+          for port in 5300 5301 5302 9090 3000; do
+            container_ids=$(docker ps -a --filter "publish=$port" --format "{{.ID}}" || true)
+            if [ ! -z "$container_ids" ]; then
+              echo "Removing containers using port $port: $container_ids"
+              echo "$container_ids" | xargs -r docker rm -f || true
+            fi
+          done
 
           # Stop and remove all containers using docker-compose
           docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
@@ -409,13 +481,22 @@ jobs:
           docker volume ls --filter "name=ecommerce" --format "{{.Name}}" | xargs -r docker volume rm -f || true
           docker volume prune -f || true
 
-          # Kill any remaining processes on deployment ports
-          echo "🔌 Force killing processes on ports..."
+          # Ultra-aggressive port cleanup
+          echo "🔌 Ultra-aggressive port cleanup..."
           for port in 5300 5301 5302 9090 3000; do
-            if sudo lsof -ti:$port; then
-              echo "Force killing processes on port $port"
-              sudo lsof -ti:$port | xargs -r sudo kill -9 || true
-            fi
+            echo "Nuking everything on port $port..."
+            
+            # Kill with lsof
+            sudo lsof -ti:$port 2>/dev/null | xargs -r sudo kill -9 || true
+            
+            # Kill with netstat
+            sudo netstat -tulpn | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' | xargs -r sudo kill -9 || true
+            
+            # Kill with ss
+            sudo ss -tulpn | grep ":$port " | awk '{print $7}' | cut -d',' -f2 | cut -d'=' -f2 | grep -v '-' | xargs -r sudo kill -9 || true
+            
+            # Kill with fuser if available
+            sudo fuser -k $port/tcp 2>/dev/null || true
           done
 
           # Remove unused images (more aggressive cleanup)
@@ -446,9 +527,9 @@ jobs:
           # Final port check
           echo "🔍 Final port check:"
           for port in 5300 5301 5302 9090 3000; do
-            if sudo lsof -ti:$port; then
+            if sudo lsof -ti:$port 2>/dev/null; then
               echo "⚠️ Port $port still in use:"
-              sudo lsof -i:$port
+              sudo lsof -i:$port || true
             else
               echo "✅ Port $port is now free"
             fi
