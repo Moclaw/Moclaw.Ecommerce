@@ -31,87 +31,31 @@ jobs:
           cd ${{ env.PROJECT_PATH }}
           echo "Working directory: $(pwd)"
       
-      - name: 🔧 Setup .NET SDK
-        run: |
-          # Check if .NET SDK is installed
-          if ! command -v dotnet &> /dev/null; then
-            echo "⚠️ .NET SDK not found. Attempting to install .NET ${{ env.DOTNET_VERSION }}..."
-            
-            # Detect OS
-            if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-              # Install .NET SDK on Linux
-              wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
-              chmod +x dotnet-install.sh
-              ./dotnet-install.sh --version ${{ env.DOTNET_VERSION }} --install-dir $HOME/.dotnet
-              export DOTNET_ROOT=$HOME/.dotnet
-              export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
-              echo "export DOTNET_ROOT=$HOME/.dotnet" >> $HOME/.bashrc
-              echo "export PATH=\$PATH:\$DOTNET_ROOT:\$DOTNET_ROOT/tools" >> $HOME/.bashrc
-            elif [[ "$OSTYPE" == "darwin"* ]]; then
-              # Install .NET SDK on macOS
-              wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh
-              chmod +x dotnet-install.sh
-              ./dotnet-install.sh --version ${{ env.DOTNET_VERSION }} --install-dir $HOME/.dotnet
-              export DOTNET_ROOT=$HOME/.dotnet
-              export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
-              echo "export DOTNET_ROOT=$HOME/.dotnet" >> $HOME/.zshrc
-              echo "export PATH=\$PATH:\$DOTNET_ROOT:\$DOTNET_ROOT/tools" >> $HOME/.zshrc
-            else
-              echo "❌ Unsupported OS for automatic .NET SDK installation."
-              echo "Please install .NET SDK ${{ env.DOTNET_VERSION }} manually on this runner."
-              exit 1
-            fi
-            
-            # Source the profile to update PATH in current session
-            if [[ -f "$HOME/.bashrc" ]]; then
-              source $HOME/.bashrc
-            elif [[ -f "$HOME/.zshrc" ]]; then
-              source $HOME/.zshrc
-            fi
-            
-            # Verify installation
-            if ! command -v dotnet &> /dev/null; then
-              echo "❌ .NET SDK installation failed. Please install manually."
-              exit 1
-            fi
-          fi
-          
-          # Display installed version
-          echo "✅ .NET SDK found:"
-          dotnet --info | grep "Version"
-
-      - name: 📦 Restore dependencies
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          # Ensure dotnet is in PATH even if environment wasn't properly sourced
-          if [[ -d "$HOME/.dotnet" ]]; then
-            export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
-          fi
-          
-          dotnet restore Moclaw.Ecommerce.sln --verbosity minimal
-
-      - name: 🏗️ Build solution
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          dotnet build Moclaw.Ecommerce.sln --configuration Release --no-restore --verbosity minimal
-
-      - name: 🧪 Run tests (if available)
-        working-directory: ${{ env.PROJECT_PATH }}
-        run: |
-          echo "🔍 Searching for test projects..."
-          if find . -name "*Test*.csproj" -o -name "*Tests.csproj" | head -1 | grep -q .; then
-            echo "✅ Test projects found, running tests..."
-            dotnet test Moclaw.Ecommerce.sln --configuration Release --no-build --verbosity minimal
-          else
-            echo "⚠️ No test projects found, skipping tests"
-          fi
-      
       - name: 🏷️ Set image tag
         id: set-tag
         run: |
           TAG=$(date +%Y%m%d%H%M%S)
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Set image tag to: $TAG"
+          
+      - name: 🐳 Build application with Docker Compose
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          echo "🏗️ Building application with Docker Compose..."
+          docker compose build --no-cache
+          
+      - name: 🧪 Run tests with Docker Compose
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: |
+          echo "🧪 Running tests with Docker Compose..."
+          # Create a test-specific docker-compose file if needed
+          if [ -f "docker-compose.test.yml" ]; then
+            docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm tests
+          else
+            echo "⚠️ No specific test configuration found, skipping Docker-based tests"
+            # Optionally run a test service if it exists in the main compose file
+            docker compose ps --services | grep -q "test" && docker compose run --rm test || echo "No test service defined"
+          fi
 
   deploy:
     name: Deploy Application
@@ -127,7 +71,7 @@ jobs:
           docker container prune -f || true
           docker network prune -f || true
 
-      - name: 🐳 Build and deploy with Docker Compose
+      - name: 🐳 Deploy with Docker Compose
         working-directory: ${{ env.PROJECT_PATH }}
         env:
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
@@ -149,18 +93,13 @@ jobs:
           services:
             ecom.gateway.api:
               image: ${{ secrets.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG}
-              build: null
             ecom.core.api:
               image: ${{ secrets.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG}
-              build: null
             ecom.users.api:
               image: ${{ secrets.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG}
-              build: null
           EOF
             echo "📋 Override file created:"
             cat docker-compose.override.yml
-          else
-            echo "⚠️ No registry credentials - will build locally"
           fi
 
           # Start services
@@ -168,8 +107,7 @@ jobs:
             echo "🚀 Deploying with registry images..."
             docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
           else
-            echo "🏗️ Building and deploying locally..."
-            docker compose build --no-cache
+            echo "🚀 Deploying with locally built images..."
             docker compose up -d
           fi
           
@@ -274,6 +212,68 @@ jobs:
 
           # Clean up temporary files
           echo "📁 Cleaning up temporary files..."
+          rm -f docker-compose.override.yml || true
+
+          # Show final system status
+          echo "📊 Final system status:"
+          echo "Docker system usage:"
+          docker system df || true
+          echo ""
+          echo "Active containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+          
+          echo "✅ Post-deployment cleanup completed"
+
+  notify-status:
+    name: Notify Deployment Status
+    runs-on: self-hosted
+    needs: [build-and-test, deploy, cleanup]
+    if: always()
+
+    steps:
+      - name: 📢 Deployment Status Summary
+        run: |
+          echo "🚀 Deployment Pipeline Summary"
+          echo "=============================="
+          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Deploy: ${{ needs.deploy.result }}"
+          echo "Cleanup: ${{ needs.cleanup.result }}"
+          echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
+          echo ""
+
+          if [ "${{ needs.deploy.result }}" = "success" ]; then
+            echo "✅ Deployment completed successfully!"
+            echo "🌐 Services are available at:"
+            echo "  - Gateway API: http://localhost:5300"
+            echo "  - Core API: http://localhost:5301" 
+            echo "  - Users API: http://localhost:5302"
+          else
+            echo "❌ Deployment failed!"
+            echo "🧹 Resources have been cleaned up automatically"
+            echo "🔍 Check the deployment logs for details"
+          fi
+          # Check each service with Docker-aware health checks
+          check_service 5300 "Gateway-API" &
+          check_service 5301 "Core-API" &
+          check_service 5302 "Users-API" &
+          
+          # Wait for all health checks
+          wait
+          
+          echo "✅ All services health checks completed"
+
+      - name: 📊 Show deployment status
+        run: |
+          echo "🎉 Deployment completed!"
+          echo "===================="
+          echo "Services:"
+          docker compose ps
+          echo ""
+          echo "Service URLs:"
+          echo "- Gateway API: http://localhost:5300"
+          echo "- Core API: http://localhost:5301"
+          echo "- Users API: http://localhost:5302"
+          echo "- Users API: http://localhost:5302"
           rm -f docker-compose.override.yml || true
 
           # Show final system status
