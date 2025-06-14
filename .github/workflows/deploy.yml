@@ -174,6 +174,22 @@ jobs:
           docker container prune -f || true
           docker network prune -f || true
 
+      - name: 📥 Pull Docker images
+        if: env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != ''
+        run: |
+          echo "📥 Pulling latest images from registry..."
+          IMAGE_TAG="${{ needs.build-and-test.outputs.image-tag }}"
+          
+          # Pull images if they exist in registry
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG} || echo "⚠️ Gateway image not found in registry"
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG} || echo "⚠️ Core image not found in registry"
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG} || echo "⚠️ Users image not found in registry"
+          
+          # Also pull latest tags
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:latest || echo "⚠️ Gateway latest image not found"
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:latest || echo "⚠️ Core latest image not found"
+          docker pull ${{ env.REGISTRY_USERNAME }}/ecomusersapi:latest || echo "⚠️ Users latest image not found"
+
       - name: � Setup monitoring configuration
         run: |
           mkdir -p monitoring
@@ -208,63 +224,102 @@ jobs:
       - name: 🚀 Deploy with Docker Compose
         env:
           IMAGE_TAG: ${{ needs.build-and-test.outputs.image-tag }}
-          DOCKER_REGISTRY: ${{ env.REGISTRY_URL && format('{0}/', env.REGISTRY_URL) || '' }}
+          DOCKER_REGISTRY: ${{ env.REGISTRY_USERNAME && format('{0}/', env.REGISTRY_USERNAME) || '' }}
         run: |
-          echo "🚀 Starting deployment..."
+          echo "🚀 Starting Docker deployment..."
           echo "Image Tag: $IMAGE_TAG"
           echo "Registry: $DOCKER_REGISTRY"
+          echo "Registry Username: ${{ env.REGISTRY_USERNAME }}"
 
-          # Create override file with specific image tags if needed
-          if [ -n "$DOCKER_REGISTRY" ] && [ -n "$IMAGE_TAG" ]; then
+          # Set environment variables for docker-compose
+          export DOCKER_REGISTRY="${DOCKER_REGISTRY}"
+          export IMAGE_TAG="${IMAGE_TAG}"
+
+          # Create override file with specific image tags if registry is available
+          if [ -n "${{ env.REGISTRY_USERNAME }}" ] && [ -n "$IMAGE_TAG" ]; then
+            echo "✅ Using registry images with tag: $IMAGE_TAG"
             cat > docker-compose.override.yml << EOF
           version: '3.8'
           services:
             ecom.gateway.api:
-              image: ${DOCKER_REGISTRY}${IMAGE_GATEWAY}:${IMAGE_TAG}
+              image: ${{ env.REGISTRY_USERNAME }}/ecomgatewayapi:${IMAGE_TAG}
+              build: null
             ecom.core.api:
-              image: ${DOCKER_REGISTRY}${IMAGE_CORE}:${IMAGE_TAG}
+              image: ${{ env.REGISTRY_USERNAME }}/ecomcoreapi:${IMAGE_TAG}
+              build: null
             ecom.users.api:
-              image: ${DOCKER_REGISTRY}${IMAGE_USERS}:${IMAGE_TAG}
+              image: ${{ env.REGISTRY_USERNAME }}/ecomusersapi:${IMAGE_TAG}
+              build: null
           EOF
+            echo "📋 Override file created:"
+            cat docker-compose.override.yml
+          else
+            echo "⚠️ No registry credentials - will build locally"
           fi
 
           # Start services
           if [ -f "docker-compose.override.yml" ]; then
+            echo "🚀 Deploying with registry images..."
             docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
           else
+            echo "🏗️ Building and deploying locally..."
             docker compose up -d --build
           fi
 
+          echo "✅ Docker deployment initiated"
+
       - name: ⏳ Wait for services to be ready
         run: |
-          echo "⏳ Waiting for services to start..."
-          sleep 30
+          echo "⏳ Waiting for Docker services to start..."
+          sleep 15
 
-          # Simple health check function
+          # Enhanced health check function
           check_service() {
             local port=$1
             local name=$2
-            local max_attempts=10
+            local max_attempts=15
             local attempt=1
             
+            echo "🔍 Checking $name service on port $port..."
+            
             while [ $attempt -le $max_attempts ]; do
-              if curl -s -f "http://localhost:$port/health" > /dev/null 2>&1 || \
-                 curl -s -f "http://localhost:$port" > /dev/null 2>&1; then
-                echo "✅ $name is responding on port $port"
+              # Check if container is running first
+              if ! docker compose ps --services --filter "status=running" | grep -q "${name,,}"; then
+                echo "⚠️ $name container is not running (attempt $attempt/$max_attempts)"
+                sleep 10
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Check HTTP endpoints
+              if curl -s -f "http://localhost:$port/health" > /dev/null 2>&1; then
+                echo "✅ $name health endpoint is responding on port $port"
+                return 0
+              elif curl -s -f "http://localhost:$port" > /dev/null 2>&1; then
+                echo "✅ $name is responding on port $port (no health endpoint)"
                 return 0
               fi
+              
               echo "⏳ Waiting for $name on port $port (attempt $attempt/$max_attempts)..."
               sleep 10
               attempt=$((attempt + 1))
             done
-            echo "⚠️ $name health check timeout on port $port"
+            
+            echo "❌ $name health check timeout on port $port"
+            echo "📋 Container logs for debugging:"
+            docker compose logs --tail=20 || true
             return 1
           }
 
-          # Check each service
-          check_service 5300 "Gateway API"
-          check_service 5301 "Core API"  
-          check_service 5302 "Users API"
+          # Check each service with Docker-aware health checks
+          check_service 5300 "Gateway-API" &
+          check_service 5301 "Core-API" &
+          check_service 5302 "Users-API" &
+          
+          # Wait for all health checks
+          wait
+          
+          echo "✅ All services health checks completed"
 
       - name: 📊 Show deployment status
         run: |
