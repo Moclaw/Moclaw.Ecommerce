@@ -35,4 +35,7 @@ services:
     networks:
       - ecommerce-network
     restart: unless-stopped
-   
+
+networks:
+  ecommerce-network:
+    driver: bridge
