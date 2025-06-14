@@ -76,7 +76,7 @@ jobs:
           echo "🔍 Searching for test projects..."
           if find . -name "*Test*.csproj" -o -name "*Tests.csproj" | head -1 | grep -q .; then
             echo "✅ Test projects found, running tests..."
-            dotnet test --configuration Release --no-build --verbosity minimal --logger trx --results-directory ./TestResults
+            dotnet test Moclaw.Ecommerce.sln --configuration Release --no-build --verbosity minimal --logger trx --results-directory ./TestResults
           else
             echo "⚠️ No test projects found, skipping tests"
           fi
