@@ -123,6 +123,17 @@ jobs:
           username: ${{ env.REGISTRY_USERNAME }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
+      - name: ℹ️ Registry info
+        run: |
+          if [ -n "${{ env.REGISTRY_USERNAME }}" ] && [ -n "${{ env.REGISTRY_PASSWORD }}" ]; then
+            echo "✅ Registry credentials available - will push images"
+            echo "Registry: ${{ env.REGISTRY_URL }}"
+            echo "Username: ${{ env.REGISTRY_USERNAME }}"
+            echo "Image will be tagged as: ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}"
+          else
+            echo "⚠️ No registry credentials - will only build locally"
+          fi
+
       - name: 🏗️ Build and push ${{ matrix.service.name }}
         uses: docker/build-push-action@v5
         with:
@@ -130,11 +141,11 @@ jobs:
           file: ${{ matrix.service.dockerfile }}
           push: ${{ env.REGISTRY_USERNAME != '' && env.REGISTRY_PASSWORD != '' }}
           tags: |
-            ${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
-            ${{ matrix.service.image_name }}:latest
+            ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:${{ needs.build-and-test.outputs.image-tag }}
+            ${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:latest
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ matrix.service.image_name }}:buildcache
-          cache-to: type=registry,ref=${{ matrix.service.image_name }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY_USERNAME }}/${{ matrix.service.image_name }}:buildcache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
