@@ -279,11 +279,142 @@ jobs:
           # Cleanup old images to save space
           docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
 
-      - name: 🧹 Cleanup on failure
+      - name: 🧹 Enhanced Cleanup on failure
         if: failure()
         run: |
-          docker-compose -f docker-compose.yml down --remove-orphans || true
-          docker system prune -f --filter "until=1h" >/dev/null 2>&1 || true
-          echo "✅ Cleanup completed"
+          echo "❌ Deployment failed, starting comprehensive cleanup..."
+          
+          # Stop and remove all containers
+          echo "🛑 Stopping and removing containers..."
+          docker-compose -f docker-compose.yml down --remove-orphans --volumes --timeout 30 || true
+          
+          # Remove any dangling containers
+          echo "🧹 Removing dangling containers..."
+          docker container prune -f || true
+          
+          # Remove unused networks
+          echo "🌐 Cleaning up networks..."
+          docker network prune -f || true
+          
+          # Remove unused volumes
+          echo "💾 Cleaning up volumes..."
+          docker volume prune -f || true
+          
+          # Remove unused images (more aggressive cleanup)
+          echo "🖼️ Cleaning up images..."
+          docker image prune -f --filter "until=1h" || true
+          docker image prune -a -f --filter "label=org.opencontainers.image.title=ecom" || true
+          
+          # Remove build cache
+          echo "🗄️ Cleaning up build cache..."
+          docker builder prune -f --filter "until=1h" || true
+          
+          # Kill any remaining processes on deployment ports
+          echo "🔌 Cleaning up ports..."
+          sudo lsof -ti:5300 | xargs -r sudo kill -9 || true
+          sudo lsof -ti:5301 | xargs -r sudo kill -9 || true
+          sudo lsof -ti:5302 | xargs -r sudo kill -9 || true
+          
+          # Clear temporary files
+          echo "📁 Cleaning up temporary files..."
+          rm -f docker-compose.override.yml || true
+          
+          # Show disk usage after cleanup
+          echo "💿 Disk usage after cleanup:"
+          df -h
+          
+          # Show remaining Docker resources
+          echo "🐳 Remaining Docker resources:"
+          docker system df
+          
+          echo "✅ Comprehensive cleanup completed"
           echo "❌ Deployment failed, cleanup executed"
+
+  cleanup-resources:
+    name: Cleanup Resources
+    runs-on: self-hosted
+    needs: [deploy-docker-compose]
+    if: always() && needs.build-and-test.outputs.should-deploy == 'true'
+    
+    steps:
+      - name: 🧹 Post-deployment cleanup
+        run: |
+          echo "🧹 Starting post-deployment cleanup..."
+          
+          # Clean up old Docker images (keep last 3 versions)
+          echo "🖼️ Cleaning up old images..."
+          
+          cleanup_old_images() {
+            local image_name=$1
+            echo "Cleaning up old versions of $image_name..."
+            
+            # Get all tags for the image, skip latest and current deployment
+            docker images --format "table {{.Repository}}:{{.Tag}}\t{{.CreatedAt}}" \
+              | grep "^$image_name:" \
+              | grep -v ":latest" \
+              | grep -v ":${{ needs.build-and-test.outputs.image-tag }}" \
+              | sort -k2 -r \
+              | tail -n +4 \
+              | awk '{print $1}' \
+              | xargs -r docker rmi -f || true
+          }
+          
+          cleanup_old_images "${{ env.IMAGE_GATEWAY }}"
+          cleanup_old_images "${{ env.IMAGE_CORE }}"
+          cleanup_old_images "${{ env.IMAGE_USERS }}"
+          
+          # Clean up dangling images and build cache
+          echo "🗑️ Cleaning up dangling resources..."
+          docker image prune -f --filter "until=24h" || true
+          docker builder prune -f --filter "until=24h" || true
+          
+          # Clean up unused networks (keep active ones)
+          echo "🌐 Cleaning up unused networks..."
+          docker network prune -f || true
+          
+          # Clean up temporary files
+          echo "📁 Cleaning up temporary files..."
+          rm -f docker-compose.override.yml || true
+          
+          # Show final system status
+          echo "📊 Final system status:"
+          echo "Docker system usage:"
+          docker system df
+          echo ""
+          echo "Disk usage:"
+          df -h
+          echo ""
+          echo "Active containers:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          
+          echo "✅ Post-deployment cleanup completed"
+
+  notify-status:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [build-and-test, deploy-docker-compose, cleanup-resources]
+    if: always() && needs.build-and-test.outputs.should-deploy == 'true'
+    
+    steps:
+      - name: 📢 Deployment Status Summary
+        run: |
+          echo "🚀 Deployment Pipeline Summary"
+          echo "=============================="
+          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Deploy: ${{ needs.deploy-docker-compose.result }}"
+          echo "Cleanup: ${{ needs.cleanup-resources.result }}"
+          echo "Image Tag: ${{ needs.build-and-test.outputs.image-tag }}"
+          echo ""
+          
+          if [ "${{ needs.deploy-docker-compose.result }}" = "success" ]; then
+            echo "✅ Deployment completed successfully!"
+            echo "🌐 Services are available at:"
+            echo "  - Gateway API: http://localhost:5300"
+            echo "  - Core API: http://localhost:5301"
+            echo "  - Users API: http://localhost:5302"
+          else
+            echo "❌ Deployment failed!"
+            echo "🧹 Resources have been cleaned up automatically"
+            echo "🔍 Check the deployment logs for details"
+          fi
 
